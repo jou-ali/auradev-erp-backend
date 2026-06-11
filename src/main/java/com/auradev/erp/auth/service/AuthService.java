@@ -7,7 +7,6 @@ import com.auradev.erp.auth.entity.RefreshToken;
 import com.auradev.erp.auth.repository.RefreshTokenRepository;
 import com.auradev.erp.auth.security.JwtService;
 import com.auradev.erp.auth.security.UserPrincipal;
-import com.auradev.erp.audit.service.AuditService;
 import com.auradev.erp.user.dto.UserResponse;
 import com.auradev.erp.user.entity.User;
 import com.auradev.erp.user.entity.UserStatus;
@@ -52,7 +51,6 @@ public class AuthService {
     private final JwtService              jwtService;
     private final PasswordEncoder         passwordEncoder;
     private final RefreshTokenRepository  refreshTokenRepository;
-    private final AuditService            auditService;
 
     @Value("${app.jwt.refresh-token-expiry-ms}")
     private long refreshExpiryMs;
@@ -82,12 +80,11 @@ public class AuthService {
      * </p>
      *
      * @param req       the login credentials
-     * @param ipAddress the originating request IP (for audit logging)
      * @return a {@link LoginResponse} containing both tokens and the user profile
      * @throws ResponseStatusException HTTP 401 if credentials are invalid or
      *                                 the account is inactive
      */
-    public LoginResponse login(LoginRequest req, String ipAddress) {
+    public LoginResponse login(LoginRequest req) {
         User user = userRepository.findByEmail(req.email())
                 .orElseThrow(() -> unauthorised("Invalid credentials"));
 
@@ -108,15 +105,6 @@ public class AuthService {
 
         user.setLastLoginAt(Instant.now());
         userRepository.save(user);
-
-        auditService.log(
-                user.getTenantId(),
-                user.getId(),
-                "LOGIN_SUCCESS",
-                "User",
-                user.getId(),
-                ipAddress
-        );
 
         return buildLoginResponse(accessToken, refreshToken, user);
     }

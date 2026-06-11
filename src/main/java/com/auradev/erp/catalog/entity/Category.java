@@ -1,39 +1,29 @@
 package com.auradev.erp.catalog.entity;
 
-import com.auradev.erp.common.entity.BaseEntity;
+import com.auradev.erp.common.entity.CatalogEntity;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
-import org.hibernate.annotations.Filter;
-
-import java.util.UUID;
 
 /**
- * Product category used to organise the catalog.
- *
- * <p>The Hibernate tenant filter ({@code tenantFilter}) must be enabled
- * by the repository/service layer before querying so that all reads are
- * automatically scoped to the current tenant.</p>
+ * Shared product category — schema v2.0 (no tenant_id).
  */
 @Getter
 @Setter
 @Entity
 @Table(name = "categories")
-@Filter(name = "tenantFilter", condition = "tenant_id = :tenantId")
-public class Category extends BaseEntity {
+public class Category extends CatalogEntity {
 
-    /** Display name of the category (e.g. "Beverages", "Dairy"). */
-    @Column(name = "name", nullable = false)
+    @Column(name = "name", nullable = false, length = 100)
     private String name;
 
-    /**
-     * Position in the category list; lower values appear first.
-     * Defaults to 0 (first position).
-     */
-    @Column(name = "sort_order", nullable = false)
-    private int sortOrder;
+    @Column(name = "slug", nullable = false, unique = true, length = 120)
+    private String slug;
 
-    /** Whether the category is visible / selectable in the catalog. */
-    @Column(name = "active", nullable = false)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "parent_id")
+    private Category parent;
+
+    @Column(name = "is_active", nullable = false)
     private boolean active = true;
 }

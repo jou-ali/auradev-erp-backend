@@ -8,7 +8,6 @@ import com.auradev.erp.auth.service.AuthService;
 import com.auradev.erp.user.dto.UserResponse;
 import com.auradev.erp.user.entity.User;
 import com.auradev.erp.user.repository.UserRepository;
-import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -49,18 +48,12 @@ public class AuthController {
     /**
      * Authenticate with e-mail + password.
      *
-     * @param req        the login credentials
-     * @param httpRequest the underlying servlet request (used to extract IP)
+     * @param req the login credentials
      * @return HTTP 200 with {@link LoginResponse}
      */
     @PostMapping("/login")
-    public ResponseEntity<LoginResponse> login(
-            @Valid @RequestBody LoginRequest req,
-            HttpServletRequest httpRequest) {
-
-        String ipAddress = resolveClientIp(httpRequest);
-        LoginResponse response = authService.login(req, ipAddress);
-        return ResponseEntity.ok(response);
+    public ResponseEntity<LoginResponse> login(@Valid @RequestBody LoginRequest req) {
+        return ResponseEntity.ok(authService.login(req));
     }
 
     /**
@@ -123,20 +116,4 @@ public class AuthController {
         return ResponseEntity.ok(response);
     }
 
-    // -------------------------------------------------------------------------
-    // Private helpers
-    // -------------------------------------------------------------------------
-
-    /**
-     * Resolve the client IP, honouring the {@code X-Forwarded-For} header when
-     * running behind a proxy or load balancer.
-     */
-    private String resolveClientIp(HttpServletRequest request) {
-        String xff = request.getHeader("X-Forwarded-For");
-        if (xff != null && !xff.isBlank()) {
-            // X-Forwarded-For can be a comma-separated list; take the first entry.
-            return xff.split(",")[0].trim();
-        }
-        return request.getRemoteAddr();
-    }
 }

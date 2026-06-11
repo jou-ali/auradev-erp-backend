@@ -5,10 +5,8 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 
 import java.math.BigDecimal;
-import java.util.UUID;
 
-public record StockAdjustRequest(
-        @NotNull UUID productId,
+public record ProductStockAdjustBody(
         @NotNull MovementType movementType,
         @NotNull @Positive BigDecimal quantity,
         String notes

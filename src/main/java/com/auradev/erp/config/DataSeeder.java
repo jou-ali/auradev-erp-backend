@@ -1,5 +1,12 @@
 package com.auradev.erp.config;
 
+import com.auradev.erp.catalog.entity.Category;
+import com.auradev.erp.catalog.entity.Product;
+import com.auradev.erp.catalog.entity.UnitType;
+import com.auradev.erp.catalog.repository.CategoryRepository;
+import com.auradev.erp.catalog.repository.ProductRepository;
+import com.auradev.erp.inventory.entity.Inventory;
+import com.auradev.erp.inventory.repository.InventoryRepository;
 import com.auradev.erp.tenant.entity.Tenant;
 import com.auradev.erp.tenant.repository.TenantRepository;
 import com.auradev.erp.user.entity.User;
@@ -13,47 +20,129 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.Locale;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class DataSeeder implements ApplicationRunner {
 
+    private static final String[][] SEED_CATEGORIES = {
+            {"Grains", "grains"},
+            {"Dairy", "dairy"},
+            {"Beverages", "beverages"},
+            {"Personal Care", "personal-care"},
+            {"Snacks", "snacks"}
+    };
+
+    private record SeedProduct(String name, String sku, String barcode, String categorySlug,
+                               UnitType unitType, String unitLabel, String mrp, String price,
+                               String cost, String tax, String stock, String reorder) {}
+
+    private static final SeedProduct[] SEED_PRODUCTS = {
+            new SeedProduct("Sona Masoori Rice", "GRN-RICE-25", "8901234500011", "grains",
+                    UnitType.weight_kg, "kg", "78", "68", "58", "5", "320", "80"),
+            new SeedProduct("Toor Dal (Arhar)", "GRN-TOOR-01", "8901234500028", "grains",
+                    UnitType.weight_kg, "kg", "145", "132", "118", "5", "64", "70"),
+            new SeedProduct("Nandini Toned Milk 500ml", "DRY-MILK-05", "8901234500073", "dairy",
+                    UnitType.unit, "pcs", "26", "25", "23", "0", "142", "60"),
+            new SeedProduct("Coca-Cola 750ml", "BEV-COK-75", "8901234500141", "beverages",
+                    UnitType.unit, "pcs", "45", "42", "35", "18", "128", "60"),
+            new SeedProduct("Parle-G Biscuits", "SNK-PRLG-01", "8901234500219", "snacks",
+                    UnitType.unit, "pcs", "10", "10", "8", "18", "412", "150"),
+            new SeedProduct("Lifebuoy Soap 125g", "PC-SOAP-12", "8901234500172", "personal-care",
+                    UnitType.unit, "pcs", "38", "34", "28", "18", "186", "80"),
+    };
+
     private final TenantRepository tenantRepository;
     private final UserRepository userRepository;
+    private final CategoryRepository categoryRepository;
+    private final ProductRepository productRepository;
+    private final InventoryRepository inventoryRepository;
     private final PasswordEncoder passwordEncoder;
 
     @Override
     public void run(ApplicationArguments args) {
-        Tenant tenant;
-        if (tenantRepository.count() > 0) {
-            tenant = tenantRepository.findAll().get(0);
-            log.debug("Seed — tenant already present (id={}), checking admin user", tenant.getId());
-        } else {
-            log.info("No tenants found — seeding initial tenant and admin user");
-            tenant = new Tenant();
-            tenant.setName("Nenjankod Supermarket");
-            tenant.setPhone("0820 256 7711");
-            tenant.setStateCode("29");
-            tenant.setBillNoPrefix("NJK");
-            tenant.setActive(true);
-            tenant = tenantRepository.save(tenant);
+        Tenant tenant = tenantRepository.count() > 0
+                ? tenantRepository.findAll().get(0)
+                : createTenant();
+
+        seedCategories();
+        seedProducts(tenant);
+
+        if (userRepository.findByEmail("admin@nenjankod.in").isEmpty()) {
+            User admin = new User();
+            admin.setTenantId(tenant.getId());
+            admin.setName("Admin");
+            admin.setEmail("admin@nenjankod.in");
+            admin.setPasswordHash(passwordEncoder.encode("Admin@123"));
+            admin.setRole(UserRole.TENANT_ADMIN);
+            admin.setStatus(UserStatus.ACTIVE);
+            userRepository.save(admin);
+            log.info("Seeded admin: admin@nenjankod.in / Admin@123");
         }
+    }
 
-        if (userRepository.findByEmail("admin@nenjankod.in").isPresent()) {
-            log.debug("Seed skipped — admin user already present");
-            return;
+    private Tenant createTenant() {
+        Tenant tenant = new Tenant();
+        tenant.setName("Nenjankod Supermarket");
+        tenant.setPhone("0820 256 7711");
+        tenant.setStateCode("29");
+        tenant.setBillNoPrefix("NJK");
+        tenant.setActive(true);
+        return tenantRepository.save(tenant);
+    }
+
+    private void seedCategories() {
+        if (categoryRepository.count() > 0) return;
+        for (String[] row : SEED_CATEGORIES) {
+            Category cat = new Category();
+            cat.setName(row[0]);
+            cat.setSlug(row[1]);
+            cat.setActive(true);
+            categoryRepository.save(cat);
         }
+        log.info("Seeded {} categories", SEED_CATEGORIES.length);
+    }
 
-        User admin = new User();
-        admin.setTenantId(tenant.getId());
-        admin.setName("Admin");
-        admin.setEmail("admin@nenjankod.in");
-        admin.setPasswordHash(passwordEncoder.encode("Admin@123"));
-        admin.setRole(UserRole.TENANT_ADMIN);
-        admin.setStatus(UserStatus.ACTIVE);
-        userRepository.save(admin);
+    private void seedProducts(Tenant tenant) {
+        if (productRepository.count() > 0) return;
 
-        log.info("Seeded tenant '{}' (id={}) | admin: admin@nenjankod.in / Admin@123",
-                tenant.getName(), tenant.getId());
+        Map<String, Category> bySlug = categoryRepository.findAll().stream()
+                .collect(Collectors.toMap(Category::getSlug, Function.identity()));
+
+        for (SeedProduct sp : SEED_PRODUCTS) {
+            Category category = bySlug.get(sp.categorySlug());
+            if (category == null) continue;
+
+            Product product = new Product();
+            product.setName(sp.name());
+            product.setSku(sp.sku());
+            product.setBarcode(sp.barcode());
+            product.setCategory(category);
+            product.setUnitType(sp.unitType());
+            product.setUnitLabel(sp.unitLabel());
+            product.setPriceMrp(new BigDecimal(sp.mrp()));
+            product.setPriceSelling(new BigDecimal(sp.price()));
+            product.setCostPrice(new BigDecimal(sp.cost()));
+            product.setTaxRatePct(new BigDecimal(sp.tax()));
+            product.setActive(true);
+            product = productRepository.save(product);
+
+            Inventory inv = new Inventory();
+            inv.setTenantId(tenant.getId());
+            inv.setProduct(product);
+            inv.setQuantityOnHand(new BigDecimal(sp.stock()));
+            inv.setLowStockThreshold(new BigDecimal(sp.reorder()));
+            inv.setReorderQuantity(new BigDecimal(sp.reorder()));
+            inv.setLastUpdated(Instant.now());
+            inventoryRepository.save(inv);
+        }
+        log.info("Seeded {} sample products with inventory", SEED_PRODUCTS.length);
     }
 }

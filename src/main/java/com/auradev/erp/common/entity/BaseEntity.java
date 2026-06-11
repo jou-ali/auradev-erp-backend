@@ -32,7 +32,7 @@ public abstract class BaseEntity {
     /**
      * Tenant the record belongs to.  Set once at creation and never changed.
      */
-    @Column(name = "tenant_id", nullable = false, updatable = false)
+    @Column(name = "tenant_id", updatable = false)
     private UUID tenantId;
 
     @CreatedDate

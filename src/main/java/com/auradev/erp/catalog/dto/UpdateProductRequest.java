@@ -5,7 +5,7 @@ import jakarta.validation.constraints.*;
 
 import java.math.BigDecimal;
 
-public record CreateProductRequest(
+public record UpdateProductRequest(
         @NotBlank String name,
         @NotBlank String sku,
         String barcode,
@@ -17,7 +17,6 @@ public record CreateProductRequest(
         @NotNull @Positive BigDecimal priceSelling,
         BigDecimal costPrice,
         @NotNull @DecimalMin("0") BigDecimal taxRatePct,
-        @NotNull @PositiveOrZero BigDecimal initialStock,
         @PositiveOrZero BigDecimal lowStockThreshold,
         @PositiveOrZero BigDecimal reorderQuantity
 ) {}

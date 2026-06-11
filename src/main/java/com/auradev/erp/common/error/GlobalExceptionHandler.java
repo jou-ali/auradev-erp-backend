@@ -15,6 +15,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
 import java.util.List;
@@ -184,6 +185,27 @@ public class GlobalExceptionHandler {
     // -------------------------------------------------------------------------
     // Unauthorised — HTTP 401
     // -------------------------------------------------------------------------
+
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<ApiError> handleResponseStatus(
+            ResponseStatusException ex,
+            HttpServletRequest request) {
+
+        HttpStatus status = HttpStatus.valueOf(ex.getStatusCode().value());
+        String code = status == HttpStatus.UNAUTHORIZED ? "UNAUTHORIZED" : status.name();
+
+        ApiError body = ApiError.builder()
+                .type("https://erp.auradev.com/problems/" + code.toLowerCase())
+                .title(status.getReasonPhrase())
+                .status(status.value())
+                .detail(ex.getReason() != null ? ex.getReason() : status.getReasonPhrase())
+                .code(code)
+                .instance(request.getRequestURI())
+                .timestamp(Instant.now())
+                .build();
+
+        return problem(status, body);
+    }
 
     @ExceptionHandler(AuthenticationException.class)
     public ResponseEntity<ApiError> handleAuthentication(

@@ -25,21 +25,19 @@ public class OpenApiConfig {
     public OpenAPI openAPI() {
         return new OpenAPI()
                 .info(new Info()
-                        .title("AuraDev Commerce ERP API")
+                        .title("AuraDev ERP API")
                         .version("v1")
-                        .description("Multi-tenant supermarket ERP — POS, Inventory, Purchases, GST billing. " +
-                                "All endpoints (except /auth/login and /auth/refresh) require a valid " +
-                                "Bearer JWT obtained from POST /api/v1/auth/login.")
+                        .description("AuraDev ERP — auth, products, categories, and inventory. " +
+                                "Obtain a JWT from POST /api/v1/auth/login, then use Authorize in Swagger UI.")
                         .contact(new Contact()
                                 .name("AuraDev Engineering")
                                 .email("engineering@auradev.com")))
                 .components(new Components()
                         .addSecuritySchemes(BEARER_AUTH_SCHEME, new SecurityScheme()
-                                .name(BEARER_AUTH_SCHEME)
                                 .type(SecurityScheme.Type.HTTP)
                                 .scheme("bearer")
                                 .bearerFormat("JWT")
-                                .description("Provide the JWT access token obtained from the /auth/login endpoint.")))
+                                .description("Paste the accessToken value from POST /api/v1/auth/login (without the 'Bearer ' prefix).")))
                 .addSecurityItem(new SecurityRequirement().addList(BEARER_AUTH_SCHEME));
     }
 }
