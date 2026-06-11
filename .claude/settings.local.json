@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(run)",
+      "Bash(redis-cli ping *)",
+      "Bash(redis-server --version)",
+      "Bash(java --version)",
+      "Bash(/usr/bin/java --version)",
+      "Bash(/usr/bin/java -version)",
+      "Bash(docker --version)",
+      "Bash(curl -s \"https://get.sdkman.io\")",
+      "Bash(bash)",
+      "Read(//private/tmp/**)",
+      "Bash(pkill -f \"spring-boot:run\")",
+      "Bash(pkill -f \"erp.*jar\")",
+      "Bash(curl -s -X POST http://localhost:8080/api/v1/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"admin@nenjankod.in\",\"password\":\"Admin@123\"}')",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s -X POST http://localhost:8080/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"admin@nenjankod.in\",\"password\":\"Admin@123\"}')"
+    ]
+  }
+}

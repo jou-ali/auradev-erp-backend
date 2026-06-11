@@ -1,0 +1,111 @@
+spring:
+  application:
+    name: auradev-erp
+
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      # Required for Supabase Supavisor session mode
+      data-source-properties:
+        prepareThreshold: 0
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: false
+        jdbc:
+          use_server_prepared_statements: false
+          time_zone: UTC
+        globally_quoted_identifiers: false
+        default_batch_fetch_size: 20
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+    validate-on-migrate: true
+
+  data:
+    redis:
+      url: ${REDIS_URL}
+      timeout: 2000ms
+
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    deserialization:
+      fail-on-unknown-properties: false
+    default-property-inclusion: non_null
+
+server:
+  port: ${PORT:8080}
+  servlet:
+    context-path: /
+  error:
+    include-message: never
+    include-binding-errors: never
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when_authorized
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui
+    operations-sorter: method
+  info:
+    title: AuraDev Commerce ERP API
+    version: v1
+    description: Multi-tenant supermarket ERP — POS, Inventory, Purchases, GST
+
+app:
+  jwt:
+    secret: ${JWT_SECRET}
+    access-token-expiry-ms: 900000       # 15 min
+    refresh-token-expiry-ms: 604800000   # 7 days
+
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
+
+  storage:
+    endpoint: ${SUPABASE_STORAGE_URL}
+    bucket: erp-assets
+    access-key: ${SUPABASE_STORAGE_KEY}
+    secret-key: ${SUPABASE_STORAGE_SECRET}
+    signed-url-expiry-seconds: 3600
+
+  cache:
+    product-list-ttl-seconds: 60
+    analytics-ttl-seconds: 120
+    settings-ttl-seconds: 3600
+
+logging:
+  level:
+    root: INFO
+    com.auradev.erp: INFO
+    org.hibernate.SQL: WARN
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
