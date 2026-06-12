@@ -26,12 +26,10 @@ public interface ProductRepository extends JpaRepository<Product, UUID> {
 
     @Query("""
             SELECT p FROM Product p
-            LEFT JOIN FETCH p.category
             WHERE p.active = true
-              AND (:q IS NULL OR :q = '' OR
-                   lower(p.name) LIKE lower(concat('%', :q, '%')) OR
+              AND (lower(p.name) LIKE lower(concat('%', :q, '%')) OR
                    lower(p.sku) LIKE lower(concat('%', :q, '%')) OR
-                   lower(p.barcode) LIKE lower(concat('%', :q, '%')))
+                   lower(coalesce(p.barcode, '')) LIKE lower(concat('%', :q, '%')))
             """)
     Page<Product> searchActive(@Param("q") String q, Pageable pageable);
 }

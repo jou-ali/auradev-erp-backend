@@ -40,7 +40,8 @@ public class StockMovement {
     @Column(name = "reference_type", columnDefinition = "ref_type")
     private RefType referenceType;
 
-    @Convert(converter = MovementTypeConverter.class)
+    @JdbcTypeCode(SqlTypes.NAMED_ENUM)
+    @Enumerated(EnumType.STRING)
     @Column(name = "movement_type", nullable = false, columnDefinition = "movement_type")
     private MovementType movementType;
 

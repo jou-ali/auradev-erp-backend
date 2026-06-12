@@ -4,7 +4,8 @@ import jakarta.persistence.AttributeConverter;
 import jakarta.persistence.Converter;
 
 /** Maps {@link MovementType#customer_return} ↔ PostgreSQL enum value {@code return}. */
-@Converter(autoApply = true)
+/** JSON/API only — JPA uses {@link SqlTypes#NAMED_ENUM} on {@link StockMovement#movementType}. */
+@Converter(autoApply = false)
 public class MovementTypeConverter implements AttributeConverter<MovementType, String> {
 
     @Override

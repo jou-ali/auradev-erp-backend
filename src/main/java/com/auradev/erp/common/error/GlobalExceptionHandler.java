@@ -16,6 +16,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.time.Instant;
 import java.util.List;
@@ -123,6 +124,24 @@ public class GlobalExceptionHandler {
     // -------------------------------------------------------------------------
     // Not Found — HTTP 404
     // -------------------------------------------------------------------------
+
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ApiError> handleNoResourceFound(
+            NoResourceFoundException ex,
+            HttpServletRequest request) {
+
+        ApiError body = ApiError.builder()
+                .type("https://erp.auradev.com/problems/not-found")
+                .title("Not Found")
+                .status(HttpStatus.NOT_FOUND.value())
+                .detail("API endpoint not found — restart the backend if you recently added new routes")
+                .code("NOT_FOUND")
+                .instance(request.getRequestURI())
+                .timestamp(Instant.now())
+                .build();
+
+        return problem(HttpStatus.NOT_FOUND, body);
+    }
 
     @ExceptionHandler(EntityNotFoundException.class)
     public ResponseEntity<ApiError> handleEntityNotFound(

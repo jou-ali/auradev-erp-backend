@@ -14,6 +14,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -76,7 +77,7 @@ public class ProductController {
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<PageResponse<StockMovementResponse>> movements(
             @PathVariable UUID id,
-            @PageableDefault(size = 50, sort = "createdAt,desc") Pageable pageable) {
+            @PageableDefault(size = 50, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
         return ResponseEntity.ok(inventoryService.getMovements(id, pageable));
     }
 

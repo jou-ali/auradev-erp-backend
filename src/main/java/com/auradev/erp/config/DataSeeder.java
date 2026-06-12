@@ -1,5 +1,8 @@
 package com.auradev.erp.config;
 
+import com.auradev.erp.billing.entity.Customer;
+import com.auradev.erp.billing.entity.CustomerType;
+import com.auradev.erp.billing.repository.CustomerRepository;
 import com.auradev.erp.catalog.entity.Category;
 import com.auradev.erp.catalog.entity.Product;
 import com.auradev.erp.catalog.entity.UnitType;
@@ -64,6 +67,7 @@ public class DataSeeder implements ApplicationRunner {
     private final CategoryRepository categoryRepository;
     private final ProductRepository productRepository;
     private final InventoryRepository inventoryRepository;
+    private final CustomerRepository customerRepository;
     private final PasswordEncoder passwordEncoder;
 
     @Override
@@ -74,6 +78,7 @@ public class DataSeeder implements ApplicationRunner {
 
         seedCategories();
         seedProducts(tenant);
+        seedCustomers(tenant);
 
         if (userRepository.findByEmail("admin@nenjankod.in").isEmpty()) {
             User admin = new User();
@@ -144,5 +149,30 @@ public class DataSeeder implements ApplicationRunner {
             inventoryRepository.save(inv);
         }
         log.info("Seeded {} sample products with inventory", SEED_PRODUCTS.length);
+    }
+
+    private void seedCustomers(Tenant tenant) {
+        if (!customerRepository.findByTenantIdOrderByNameAsc(tenant.getId()).isEmpty()) return;
+
+        Object[][] rows = {
+                {"Walk-in Customer", null, CustomerType.walkin, 0, "0"},
+                {"Ramesh Gowda", "9845211003", CustomerType.b2c, 480, "0"},
+                {"Lakshmi Stores", "9901677254", CustomerType.b2b, 0, "4250"},
+                {"Anitha Reddy", "9008045517", CustomerType.b2c, 1260, "0"},
+                {"Suresh Kumar", "9448832109", CustomerType.b2c, 95, "320"},
+                {"Sri Annapurna Mess", "9731560042", CustomerType.b2b, 0, "8900"},
+        };
+
+        for (Object[] row : rows) {
+            Customer c = new Customer();
+            c.setTenantId(tenant.getId());
+            c.setName((String) row[0]);
+            c.setPhone((String) row[1]);
+            c.setType((CustomerType) row[2]);
+            c.setLoyaltyPoints((Integer) row[3]);
+            c.setCreditBalance(new BigDecimal((String) row[4]));
+            customerRepository.save(c);
+        }
+        log.info("Seeded {} customers", rows.length);
     }
 }
