@@ -54,7 +54,10 @@ public class SecurityConfig {
             "/swagger-ui/**",
             "/swagger-ui.html",
             "/api-docs/**",
-            "/v3/api-docs/**"
+            "/v3/api-docs/**",
+            "/api/v1/inventory/import/template",
+            "/api/v1/inventory/import/sample",
+            "/api/v1/inventory/import/stock-sample"
     };
 
     private final JwtAuthFilter jwtAuthFilter;
@@ -100,7 +103,7 @@ public class SecurityConfig {
         config.setAllowedOrigins(origins.stream().map(String::trim).toList());
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Tenant-Id"));
-        config.setExposedHeaders(List.of("Authorization"));
+        config.setExposedHeaders(List.of("Authorization", "Content-Disposition"));
         config.setAllowCredentials(false);
         config.setMaxAge(3600L);
 

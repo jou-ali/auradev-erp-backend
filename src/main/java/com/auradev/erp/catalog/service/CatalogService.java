@@ -9,10 +9,14 @@ import com.auradev.erp.catalog.repository.SupplierRepository;
 import com.auradev.erp.common.error.BusinessException;
 import com.auradev.erp.common.error.EntityNotFoundException;
 import com.auradev.erp.common.pagination.PageResponse;
+import com.auradev.erp.dashboard.repository.DashboardQueryRepository;
 import com.auradev.erp.inventory.entity.Inventory;
 import com.auradev.erp.inventory.entity.MovementType;
+import com.auradev.erp.inventory.repository.InventoryRepository;
 import com.auradev.erp.inventory.service.InventoryService;
 import com.auradev.erp.tenant.TenantContext;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import com.auradev.erp.user.entity.UserRole;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,9 +32,15 @@ import java.io.IOException;
 import java.io.StringWriter;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -43,6 +53,8 @@ public class CatalogService {
     private final CategoryRepository categoryRepository;
     private final SupplierRepository supplierRepository;
     private final InventoryService inventoryService;
+    private final InventoryRepository inventoryRepository;
+    private final DashboardQueryRepository dashboardQueryRepository;
 
     @Transactional(readOnly = true)
     public PageResponse<ProductResponse> listProducts(
@@ -52,10 +64,13 @@ public class CatalogService {
                 ? productRepository.searchActive(q.trim(), pageable)
                 : productRepository.findByActiveTrue(pageable);
 
-        List<ProductResponse> items = page.getContent().stream()
+        List<Product> products = page.getContent();
+        Map<UUID, Inventory> inventoryByProduct = loadInventoryMap(tenantId, products);
+
+        List<ProductResponse> items = products.stream()
                 .filter(p -> matchesCategory(p, category))
                 .filter(p -> matchesUnit(p, unit))
-                .map(p -> toResponse(p, tenantId, isCashier()))
+                .map(p -> toResponse(p, inventoryByProduct.get(p.getId()), isCashier()))
                 .filter(r -> matchesStatus(r, status))
                 .collect(Collectors.toList());
 
@@ -66,14 +81,44 @@ public class CatalogService {
     public ProductResponse getProduct(UUID id) {
         Product product = productRepository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("Product", id));
-        return toResponse(product, TenantContext.require(), isCashier());
+        UUID tenantId = TenantContext.require();
+        return toResponse(product, inventoryService.getInventory(tenantId, id), isCashier());
+    }
+
+    @Transactional(readOnly = true)
+    public List<ProductResponse> listPosQuickPicks(UUID tenantId, int limit) {
+        int cap = Math.min(Math.max(limit, 1), 24);
+        List<UUID> topIds = dashboardQueryRepository.topSellingProductIds(tenantId, cap, 7);
+        List<Product> products = new ArrayList<>();
+
+        if (!topIds.isEmpty()) {
+            Map<UUID, Product> byId = productRepository.findAllById(topIds).stream()
+                    .filter(Product::isActive)
+                    .collect(Collectors.toMap(Product::getId, Function.identity()));
+            topIds.stream().map(byId::get).filter(p -> p != null).forEach(products::add);
+        }
+
+        if (products.size() < cap) {
+            Set<UUID> seen = products.stream().map(Product::getId).collect(Collectors.toCollection(HashSet::new));
+            productRepository.findByActiveTrue(PageRequest.of(0, cap, Sort.by("name"))).getContent().stream()
+                    .filter(p -> !seen.contains(p.getId()))
+                    .limit(cap - products.size())
+                    .forEach(products::add);
+        }
+
+        Map<UUID, Inventory> inventoryByProduct = loadInventoryMap(tenantId, products);
+        boolean cashier = isCashier();
+        return products.stream()
+                .map(p -> toResponse(p, inventoryByProduct.get(p.getId()), cashier))
+                .collect(Collectors.toList());
     }
 
     @Transactional(readOnly = true)
     public ProductResponse getByBarcode(String barcode) {
         Product product = productRepository.findByBarcode(barcode)
                 .orElseThrow(() -> new EntityNotFoundException("Product[barcode=" + barcode + "]", barcode));
-        return toResponse(product, TenantContext.require(), isCashier());
+        UUID tenantId = TenantContext.require();
+        return toResponse(product, inventoryService.getInventory(tenantId, product.getId()), isCashier());
     }
 
     public ProductResponse createProduct(CreateProductRequest req) {
@@ -92,7 +137,7 @@ public class CatalogService {
                 req.lowStockThreshold(), req.reorderQuantity());
 
         log.info("Product created id={} sku={}", saved.getId(), saved.getSku());
-        return toResponse(saved, tenantId, isCashier());
+        return toResponse(saved, inventoryService.getInventory(tenantId, saved.getId()), isCashier());
     }
 
     public ProductResponse updateProduct(UUID id, UpdateProductRequest req) {
@@ -109,7 +154,7 @@ public class CatalogService {
         Product saved = productRepository.save(product);
         inventoryService.updateThresholds(tenantId, id, req.lowStockThreshold(), req.reorderQuantity());
 
-        return toResponse(saved, tenantId, isCashier());
+        return toResponse(saved, inventoryService.getInventory(tenantId, saved.getId()), isCashier());
     }
 
     public void deleteProduct(UUID id) {
@@ -194,6 +239,78 @@ public class CatalogService {
         categoryRepository.save(category);
     }
 
+    @Transactional(readOnly = true)
+    public List<SupplierResponse> listSuppliers() {
+        return supplierRepository.findByActiveTrueOrderByNameAsc().stream()
+                .map(this::toSupplierResponse)
+                .collect(Collectors.toList());
+    }
+
+    public SupplierResponse createSupplier(CreateSupplierRequest req) {
+        String name = req.name().trim();
+        if (supplierRepository.existsByNameIgnoreCaseAndActiveTrue(name)) {
+            throw new BusinessException("DUPLICATE_SUPPLIER", "Supplier already exists: " + name);
+        }
+        String gstin = blankToNull(req.gstin());
+        if (gstin != null) {
+            supplierRepository.findByGstinIgnoreCaseAndActiveTrue(gstin).ifPresent(s -> {
+                throw new BusinessException("DUPLICATE_GSTIN", "GSTIN already used by: " + s.getName());
+            });
+        }
+        Supplier supplier = new Supplier();
+        applySupplierFields(supplier, req);
+        supplier.setActive(true);
+        return toSupplierResponse(supplierRepository.save(supplier));
+    }
+
+    public SupplierResponse updateSupplier(UUID id, CreateSupplierRequest req) {
+        Supplier supplier = supplierRepository.findById(id)
+                .orElseThrow(() -> new EntityNotFoundException("Supplier", id));
+        String name = req.name().trim();
+        supplierRepository.findByNameIgnoreCaseAndActiveTrue(name)
+                .filter(s -> !s.getId().equals(id))
+                .ifPresent(s -> {
+                    throw new BusinessException("DUPLICATE_SUPPLIER", "Supplier already exists: " + name);
+                });
+        String gstin = blankToNull(req.gstin());
+        if (gstin != null) {
+            supplierRepository.findByGstinIgnoreCaseAndActiveTrue(gstin)
+                    .filter(s -> !s.getId().equals(id))
+                    .ifPresent(s -> {
+                        throw new BusinessException("DUPLICATE_GSTIN", "GSTIN already used by: " + s.getName());
+                    });
+        }
+        applySupplierFields(supplier, req);
+        return toSupplierResponse(supplierRepository.save(supplier));
+    }
+
+    public void deleteSupplier(UUID id) {
+        Supplier supplier = supplierRepository.findById(id)
+                .orElseThrow(() -> new EntityNotFoundException("Supplier", id));
+        supplier.setActive(false);
+        supplierRepository.save(supplier);
+    }
+
+    private void applySupplierFields(Supplier supplier, CreateSupplierRequest req) {
+        supplier.setName(req.name().trim());
+        supplier.setContactPerson(blankToNull(req.contactPerson()));
+        supplier.setPhone(blankToNull(req.phone()));
+        supplier.setEmail(blankToNull(req.email()));
+        supplier.setGstin(blankToNull(req.gstin()));
+        supplier.setAddress(blankToNull(req.address()));
+    }
+
+    private SupplierResponse toSupplierResponse(Supplier s) {
+        return new SupplierResponse(
+                s.getId(),
+                s.getName(),
+                s.getContactPerson(),
+                s.getPhone(),
+                s.getEmail(),
+                s.getGstin(),
+                s.getAddress());
+    }
+
     private void applyCreate(Product product, CreateProductRequest req) {
         product.setName(req.name().trim());
         product.setSku(req.sku().trim());
@@ -223,8 +340,7 @@ public class CatalogService {
         product.setTaxRatePct(req.taxRatePct());
     }
 
-    private ProductResponse toResponse(Product p, UUID tenantId, boolean stripCost) {
-        Inventory inv = inventoryService.getInventory(tenantId, p.getId());
+    private ProductResponse toResponse(Product p, Inventory inv, boolean stripCost) {
         BigDecimal qty = inv != null ? inv.getQuantityOnHand() : BigDecimal.ZERO;
         BigDecimal low = inv != null ? inv.getLowStockThreshold() : null;
         BigDecimal reorder = inv != null ? inv.getReorderQuantity() : null;
@@ -238,6 +354,15 @@ public class CatalogService {
                 qty, low, reorder,
                 p.stockStatus(qty, low), p.isActive(), p.getCreatedAt()
         );
+    }
+
+    private Map<UUID, Inventory> loadInventoryMap(UUID tenantId, List<Product> products) {
+        if (products.isEmpty()) {
+            return Map.of();
+        }
+        List<UUID> ids = products.stream().map(Product::getId).toList();
+        return inventoryRepository.findByTenantIdAndProductIdIn(tenantId, ids).stream()
+                .collect(Collectors.toMap(inv -> inv.getProduct().getId(), Function.identity()));
     }
 
     private CategoryResponse toCategoryResponse(Category c) {

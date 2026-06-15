@@ -10,6 +10,7 @@ public record BillLineResponse(
         String unitLabel,
         BigDecimal quantity,
         BigDecimal unitPrice,
+        BigDecimal lineDiscount,
         BigDecimal gstRate,
         BigDecimal lineTotal
 ) {}

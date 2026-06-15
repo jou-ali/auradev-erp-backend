@@ -3,11 +3,11 @@ package com.auradev.erp.dashboard.dto;
 import java.math.BigDecimal;
 
 public record DashboardKpis(
-        BigDecimal todaySales,
-        BigDecimal yesterdaySales,
-        long billsToday,
-        long billsYesterday,
-        long itemsSoldToday,
-        long itemsSoldYesterday,
+        BigDecimal periodSales,
+        BigDecimal compareSales,
+        long periodBills,
+        long compareBills,
+        long periodItems,
+        long compareItems,
         int lowStockCount
 ) {}

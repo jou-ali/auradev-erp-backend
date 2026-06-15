@@ -6,11 +6,14 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.TextStyle;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 
 @Repository
@@ -18,69 +21,249 @@ import java.util.*;
 public class DashboardQueryRepository {
 
     private static final ZoneId STORE_ZONE = ZoneId.of("Asia/Kolkata");
+    private static final BigDecimal ZERO = BigDecimal.ZERO;
 
     private final JdbcTemplate jdbc;
 
-    public BigDecimal sumSalesBetween(UUID tenantId, Instant from, Instant to) {
-        BigDecimal total = jdbc.queryForObject("""
-                SELECT COALESCE(SUM(grand_total), 0)
-                FROM bills
-                WHERE tenant_id = ? AND status = 'COMPLETED'
-                  AND created_at >= ? AND created_at < ?
-                """, BigDecimal.class, tenantId, Timestamp.from(from), Timestamp.from(to));
-        return total != null ? total : BigDecimal.ZERO;
+    public DashboardKpis fetchKpis(UUID tenantId, DashboardScope scope) {
+        Instant windowFrom = scope.compareFrom();
+        Instant windowTo = scope.periodTo();
+
+        if (scope.productId() != null) {
+            return fetchProductKpis(tenantId, scope, windowFrom, windowTo);
+        }
+        return fetchBillKpis(tenantId, scope, windowFrom, windowTo);
     }
 
-    public long countBillsBetween(UUID tenantId, Instant from, Instant to) {
-        Long count = jdbc.queryForObject("""
-                SELECT COUNT(*)
-                FROM bills
-                WHERE tenant_id = ? AND status = 'COMPLETED'
-                  AND created_at >= ? AND created_at < ?
-                """, Long.class, tenantId, Timestamp.from(from), Timestamp.from(to));
-        return count != null ? count : 0L;
+    private DashboardKpis fetchBillKpis(UUID tenantId, DashboardScope scope, Instant windowFrom, Instant windowTo) {
+        var sql = new StringBuilder("""
+                SELECT
+                  COALESCE(SUM(CASE WHEN b.created_at >= ? AND b.created_at < ? THEN b.grand_total END), 0) AS period_sales,
+                  COALESCE(SUM(CASE WHEN b.created_at >= ? AND b.created_at < ? THEN b.grand_total END), 0) AS compare_sales,
+                  COUNT(CASE WHEN b.created_at >= ? AND b.created_at < ? THEN 1 END) AS period_bills,
+                  COUNT(CASE WHEN b.created_at >= ? AND b.created_at < ? THEN 1 END) AS compare_bills,
+                  (SELECT COALESCE(SUM(bi.quantity), 0)
+                   FROM bill_items bi
+                   JOIN bills bx ON bx.id = bi.bill_id
+                   WHERE bx.tenant_id = ? AND bx.status = 'COMPLETED'
+                     AND bx.created_at >= ? AND bx.created_at < ?
+                """);
+        List<Object> args = new ArrayList<>();
+        args.add(Timestamp.from(scope.periodFrom()));
+        args.add(Timestamp.from(scope.periodTo()));
+        args.add(Timestamp.from(scope.compareFrom()));
+        args.add(Timestamp.from(scope.compareTo()));
+        args.add(Timestamp.from(scope.periodFrom()));
+        args.add(Timestamp.from(scope.periodTo()));
+        args.add(Timestamp.from(scope.compareFrom()));
+        args.add(Timestamp.from(scope.compareTo()));
+        args.add(tenantId);
+        args.add(Timestamp.from(scope.periodFrom()));
+        args.add(Timestamp.from(scope.periodTo()));
+        appendBillFilters(sql, scope, args, true, "bx");
+        sql.append(") AS period_items, (SELECT COALESCE(SUM(bi.quantity), 0) FROM bill_items bi JOIN bills bx ON bx.id = bi.bill_id WHERE bx.tenant_id = ? AND bx.status = 'COMPLETED' AND bx.created_at >= ? AND bx.created_at < ? ");
+        args.add(tenantId);
+        args.add(Timestamp.from(scope.compareFrom()));
+        args.add(Timestamp.from(scope.compareTo()));
+        appendBillFilters(sql, scope, args, true, "bx");
+        sql.append("""
+                ) AS compare_items
+                FROM bills b
+                WHERE b.tenant_id = ? AND b.status = 'COMPLETED'
+                  AND b.created_at >= ? AND b.created_at < ?
+                """);
+        args.add(tenantId);
+        args.add(Timestamp.from(windowFrom));
+        args.add(Timestamp.from(windowTo));
+        appendBillFilters(sql, scope, args);
+
+        var billStats = jdbc.queryForObject(sql.toString(),
+                (rs, rowNum) -> new Object[] {
+                        rs.getBigDecimal("period_sales"),
+                        rs.getBigDecimal("compare_sales"),
+                        rs.getLong("period_bills"),
+                        rs.getLong("compare_bills"),
+                        toWholeUnits(rs.getBigDecimal("period_items")),
+                        toWholeUnits(rs.getBigDecimal("compare_items")),
+                },
+                args.toArray());
+
+        return new DashboardKpis(
+                (BigDecimal) billStats[0],
+                (BigDecimal) billStats[1],
+                (Long) billStats[2],
+                (Long) billStats[3],
+                (Long) billStats[4],
+                (Long) billStats[5],
+                countLowStock(tenantId));
     }
 
-    public long sumItemsSoldBetween(UUID tenantId, Instant from, Instant to) {
-        Long total = jdbc.queryForObject("""
-                SELECT COALESCE(SUM(bi.quantity), 0)
+    private DashboardKpis fetchProductKpis(UUID tenantId, DashboardScope scope, Instant windowFrom, Instant windowTo) {
+        var sql = new StringBuilder("""
+                SELECT
+                  COALESCE(SUM(CASE WHEN b.created_at >= ? AND b.created_at < ? THEN bi.line_total END), 0) AS period_sales,
+                  COALESCE(SUM(CASE WHEN b.created_at >= ? AND b.created_at < ? THEN bi.line_total END), 0) AS compare_sales,
+                  COUNT(DISTINCT CASE WHEN b.created_at >= ? AND b.created_at < ? THEN b.id END) AS period_bills,
+                  COUNT(DISTINCT CASE WHEN b.created_at >= ? AND b.created_at < ? THEN b.id END) AS compare_bills,
+                  COALESCE(SUM(CASE WHEN b.created_at >= ? AND b.created_at < ? THEN bi.quantity END), 0) AS period_items,
+                  COALESCE(SUM(CASE WHEN b.created_at >= ? AND b.created_at < ? THEN bi.quantity END), 0) AS compare_items
                 FROM bill_items bi
                 JOIN bills b ON b.id = bi.bill_id
                 WHERE b.tenant_id = ? AND b.status = 'COMPLETED'
+                  AND bi.product_id = ?
                   AND b.created_at >= ? AND b.created_at < ?
-                """, Long.class, tenantId, Timestamp.from(from), Timestamp.from(to));
-        return total != null ? total.longValue() : 0L;
+                """);
+        List<Object> args = new ArrayList<>();
+        args.add(Timestamp.from(scope.periodFrom()));
+        args.add(Timestamp.from(scope.periodTo()));
+        args.add(Timestamp.from(scope.compareFrom()));
+        args.add(Timestamp.from(scope.compareTo()));
+        args.add(Timestamp.from(scope.periodFrom()));
+        args.add(Timestamp.from(scope.periodTo()));
+        args.add(Timestamp.from(scope.compareFrom()));
+        args.add(Timestamp.from(scope.compareTo()));
+        args.add(Timestamp.from(scope.periodFrom()));
+        args.add(Timestamp.from(scope.periodTo()));
+        args.add(Timestamp.from(scope.compareFrom()));
+        args.add(Timestamp.from(scope.compareTo()));
+        args.add(tenantId);
+        args.add(scope.productId());
+        args.add(Timestamp.from(windowFrom));
+        args.add(Timestamp.from(windowTo));
+        appendBillFilters(sql, scope, args, false);
+
+        return jdbc.queryForObject(sql.toString(),
+                (rs, rowNum) -> new DashboardKpis(
+                        rs.getBigDecimal("period_sales"),
+                        rs.getBigDecimal("compare_sales"),
+                        rs.getLong("period_bills"),
+                        rs.getLong("compare_bills"),
+                        toWholeUnits(rs.getBigDecimal("period_items")),
+                        toWholeUnits(rs.getBigDecimal("compare_items")),
+                        countLowStock(tenantId)),
+                args.toArray());
     }
 
-    public List<SalesDayPoint> salesTrend(UUID tenantId, int days) {
-        List<SalesDayPoint> points = new ArrayList<>();
-        LocalDate today = LocalDate.now(STORE_ZONE);
+    public List<SalesDayPoint> salesTrend(UUID tenantId, DashboardScope scope) {
+        LocalDate periodStart = LocalDate.ofInstant(scope.periodFrom(), STORE_ZONE);
+        LocalDate periodEnd = LocalDate.ofInstant(scope.periodTo(), STORE_ZONE).minusDays(1);
+        LocalDate compareStart = LocalDate.ofInstant(scope.compareFrom(), STORE_ZONE);
 
-        for (int i = days - 1; i >= 0; i--) {
-            LocalDate day = today.minusDays(i);
-            LocalDate prevDay = day.minusDays(days);
+        long periodDays = ChronoUnit.DAYS.between(periodStart, periodEnd) + 1;
+        int pointCount = scope.trendPointCount();
+        int step = (int) Math.max(1, Math.ceil((double) periodDays / pointCount));
 
-            Instant curFrom = day.atStartOfDay(STORE_ZONE).toInstant();
-            Instant curTo = day.plusDays(1).atStartOfDay(STORE_ZONE).toInstant();
-            Instant prevFrom = prevDay.atStartOfDay(STORE_ZONE).toInstant();
-            Instant prevTo = prevDay.plusDays(1).atStartOfDay(STORE_ZONE).toInstant();
+        Instant fetchFrom = scope.compareFrom();
+        Instant fetchTo = scope.periodTo();
+        Map<LocalDate, BigDecimal> salesByDay = fetchDailySales(tenantId, scope, fetchFrom, fetchTo);
 
-            String label = day.getDayOfWeek().getDisplayName(TextStyle.SHORT, Locale.ENGLISH);
+        List<SalesDayPoint> points = new ArrayList<>(pointCount);
+        for (int i = 0; i < pointCount; i++) {
+            long offset = Math.min(i * step, periodDays - 1);
+            LocalDate day = periodStart.plusDays(offset);
+            LocalDate prevDay = compareStart.plusDays(offset);
+            String label = formatTrendLabel(day, scope.preset(), periodDays);
             points.add(new SalesDayPoint(
                     label,
-                    sumSalesBetween(tenantId, curFrom, curTo),
-                    sumSalesBetween(tenantId, prevFrom, prevTo)
-            ));
+                    salesByDay.getOrDefault(day, ZERO),
+                    salesByDay.getOrDefault(prevDay, ZERO)));
         }
         return points;
     }
 
-    public List<TopProductPoint> topProductsToday(UUID tenantId, int limit) {
-        LocalDate today = LocalDate.now(STORE_ZONE);
-        Instant from = today.atStartOfDay(STORE_ZONE).toInstant();
-        Instant to = today.plusDays(1).atStartOfDay(STORE_ZONE).toInstant();
+    private static String formatTrendLabel(LocalDate day, String preset, long periodDays) {
+        if (periodDays == 1) {
+            return switch (preset != null ? preset : "") {
+                case "yesterday" -> "Yesterday";
+                case "today" -> "Today";
+                default -> day.getDayOfMonth() + " " + day.getMonth().getDisplayName(TextStyle.SHORT, Locale.ENGLISH);
+            };
+        }
+        if (periodDays <= 7) {
+            return day.getDayOfWeek().getDisplayName(TextStyle.SHORT, Locale.ENGLISH);
+        }
+        if (periodDays <= 14) {
+            return String.valueOf(day.getDayOfMonth());
+        }
+        return day.getDayOfMonth() + " " + day.getMonth().getDisplayName(TextStyle.SHORT, Locale.ENGLISH);
+    }
 
+    private Map<LocalDate, BigDecimal> fetchDailySales(UUID tenantId, DashboardScope scope, Instant from, Instant to) {
+        if (scope.productId() != null) {
+            return fetchDailyProductSales(tenantId, scope, from, to);
+        }
+
+        var sql = new StringBuilder("""
+                SELECT (b.created_at AT TIME ZONE 'Asia/Kolkata')::date AS day,
+                       COALESCE(SUM(b.grand_total), 0) AS total
+                FROM bills b
+                WHERE b.tenant_id = ? AND b.status = 'COMPLETED'
+                  AND b.created_at >= ? AND b.created_at < ?
+                """);
+        List<Object> args = new ArrayList<>();
+        args.add(tenantId);
+        args.add(Timestamp.from(from));
+        args.add(Timestamp.from(to));
+        appendBillFilters(sql, scope, args);
+        sql.append(" GROUP BY 1");
+
+        return mapDailySales(sql.toString(), args);
+    }
+
+    private Map<LocalDate, BigDecimal> fetchDailyProductSales(UUID tenantId, DashboardScope scope, Instant from, Instant to) {
+        var sql = new StringBuilder("""
+                SELECT (b.created_at AT TIME ZONE 'Asia/Kolkata')::date AS day,
+                       COALESCE(SUM(bi.line_total), 0) AS total
+                FROM bill_items bi
+                JOIN bills b ON b.id = bi.bill_id
+                WHERE b.tenant_id = ? AND b.status = 'COMPLETED'
+                  AND bi.product_id = ?
+                  AND b.created_at >= ? AND b.created_at < ?
+                """);
+        List<Object> args = new ArrayList<>();
+        args.add(tenantId);
+        args.add(scope.productId());
+        args.add(Timestamp.from(from));
+        args.add(Timestamp.from(to));
+        appendBillFilters(sql, scope, args, false);
+        sql.append(" GROUP BY 1");
+
+        return mapDailySales(sql.toString(), args);
+    }
+
+    private Map<LocalDate, BigDecimal> mapDailySales(String sql, List<Object> args) {
+        List<Map.Entry<LocalDate, BigDecimal>> rows = jdbc.query(sql,
+                (rs, rowNum) -> Map.entry(
+                        rs.getDate("day").toLocalDate(),
+                        rs.getBigDecimal("total")),
+                args.toArray());
+
+        Map<LocalDate, BigDecimal> map = new HashMap<>();
+        for (Map.Entry<LocalDate, BigDecimal> row : rows) {
+            map.put(row.getKey(), row.getValue());
+        }
+        return map;
+    }
+
+    public List<UUID> topSellingProductIds(UUID tenantId, int limit, int days) {
+        Instant from = LocalDate.now(STORE_ZONE).minusDays(days)
+                .atStartOfDay(STORE_ZONE).toInstant();
         return jdbc.query("""
+                SELECT bi.product_id
+                FROM bill_items bi
+                JOIN bills b ON b.id = bi.bill_id
+                WHERE b.tenant_id = ? AND b.status = 'COMPLETED'
+                  AND b.created_at >= ?
+                GROUP BY bi.product_id
+                ORDER BY SUM(bi.quantity) DESC
+                LIMIT ?
+                """,
+                (rs, rowNum) -> UUID.fromString(rs.getString("product_id")),
+                tenantId, Timestamp.from(from), limit);
+    }
+
+    public List<TopProductPoint> topProductsInScope(UUID tenantId, DashboardScope scope, int limit) {
+        var sql = new StringBuilder("""
                 SELECT bi.product_name_snapshot,
                        COALESCE(SUM(bi.quantity), 0) AS qty,
                        COALESCE(SUM(bi.line_total), 0) AS rev
@@ -88,47 +271,79 @@ public class DashboardQueryRepository {
                 JOIN bills b ON b.id = bi.bill_id
                 WHERE b.tenant_id = ? AND b.status = 'COMPLETED'
                   AND b.created_at >= ? AND b.created_at < ?
-                GROUP BY bi.product_id, bi.product_name_snapshot
-                ORDER BY rev DESC
-                LIMIT ?
-                """,
+                """);
+        List<Object> args = new ArrayList<>();
+        args.add(tenantId);
+        args.add(Timestamp.from(scope.periodFrom()));
+        args.add(Timestamp.from(scope.periodTo()));
+        appendBillFilters(sql, scope, args);
+        if (scope.productId() != null) {
+            sql.append(" AND bi.product_id = ?");
+            args.add(scope.productId());
+        }
+        sql.append("""
+                 GROUP BY bi.product_id, bi.product_name_snapshot
+                 ORDER BY rev DESC
+                 LIMIT ?
+                """);
+        args.add(limit);
+
+        return jdbc.query(sql.toString(),
                 (rs, rowNum) -> new TopProductPoint(
                         rs.getString("product_name_snapshot"),
                         rs.getLong("qty"),
                         rs.getBigDecimal("rev")),
-                tenantId, Timestamp.from(from), Timestamp.from(to), limit);
+                args.toArray());
     }
 
-    public List<RecentBillRow> recentBills(UUID tenantId, int limit) {
-        return jdbc.query("""
-                SELECT b.bill_no,
+    public List<RecentBillRow> recentBillsInScope(UUID tenantId, DashboardScope scope, int limit) {
+        var sql = new StringBuilder("""
+                SELECT b.id,
+                       b.bill_no,
                        c.name AS customer,
                        u.name AS cashier,
-                       (SELECT COUNT(*)::int FROM bill_items bi WHERE bi.bill_id = b.id) AS items,
+                       COALESCE(items.cnt, 0) AS items,
                        b.grand_total,
-                       COALESCE(
-                           (SELECT p.method::text FROM payments p WHERE p.bill_id = b.id ORDER BY p.amount DESC LIMIT 1),
-                           'CASH'
-                       ) AS payment,
+                       COALESCE(pay.method::text, 'CASH') AS payment,
                        b.payment_status::text AS payment_status,
                        b.created_at
                 FROM bills b
                 JOIN customers c ON c.id = b.customer_id
                 JOIN users u ON u.id = b.cashier_id
+                LEFT JOIN LATERAL (
+                    SELECT COUNT(*)::int AS cnt FROM bill_items bi WHERE bi.bill_id = b.id
+                ) items ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT p.method FROM payments p
+                    WHERE p.bill_id = b.id
+                    ORDER BY p.amount DESC
+                    LIMIT 1
+                ) pay ON TRUE
                 WHERE b.tenant_id = ? AND b.status = 'COMPLETED'
-                ORDER BY b.created_at DESC
-                LIMIT ?
-                """,
-                (rs, rowNum) -> new RecentBillRow(
-                        rs.getString("bill_no"),
-                        rs.getString("customer"),
-                        rs.getString("cashier"),
-                        rs.getInt("items"),
-                        rs.getBigDecimal("grand_total"),
-                        formatPayment(rs.getString("payment")),
-                        rs.getString("payment_status"),
-                        rs.getTimestamp("created_at").toInstant()),
-                tenantId, limit);
+                  AND b.created_at >= ? AND b.created_at < ?
+                """);
+        List<Object> args = new ArrayList<>();
+        args.add(tenantId);
+        args.add(Timestamp.from(scope.periodFrom()));
+        args.add(Timestamp.from(scope.periodTo()));
+        appendBillFilters(sql, scope, args);
+        sql.append(" ORDER BY b.created_at DESC LIMIT ?");
+        args.add(limit);
+
+        return jdbc.query(sql.toString(), this::mapRecentBill, args.toArray());
+    }
+
+    private RecentBillRow mapRecentBill(ResultSet rs, int rowNum) throws SQLException {
+        return new RecentBillRow(
+                (UUID) rs.getObject("id"),
+                rs.getString("bill_no"),
+                rs.getString("customer"),
+                rs.getString("cashier"),
+                rs.getInt("items"),
+                rs.getBigDecimal("grand_total"),
+                formatPayment(rs.getString("payment")),
+                rs.getString("payment_status"),
+                rs.getTimestamp("created_at").toInstant());
     }
 
     public int countLowStock(UUID tenantId) {
@@ -206,6 +421,43 @@ public class DashboardQueryRepository {
                         rs.getString("notes"),
                         rs.getTimestamp("created_at").toInstant()),
                 tenantId, limit);
+    }
+
+    private static long toWholeUnits(BigDecimal qty) {
+        if (qty == null) return 0L;
+        return qty.setScale(0, java.math.RoundingMode.HALF_UP).longValue();
+    }
+
+    private static void appendBillFilters(StringBuilder sql, DashboardScope scope, List<Object> args) {
+        appendBillFilters(sql, scope, args, true, "b");
+    }
+
+    private static void appendBillFilters(StringBuilder sql, DashboardScope scope, List<Object> args, boolean includeProductExists) {
+        appendBillFilters(sql, scope, args, includeProductExists, "b");
+    }
+
+    private static void appendBillFilters(
+            StringBuilder sql,
+            DashboardScope scope,
+            List<Object> args,
+            boolean includeProductExists,
+            String billAlias) {
+        if (scope.customerId() != null) {
+            sql.append(" AND ").append(billAlias).append(".customer_id = ?");
+            args.add(scope.customerId());
+        }
+        if (includeProductExists && scope.productId() != null) {
+            sql.append("""
+                     AND EXISTS (
+                       SELECT 1 FROM bill_items bi_f
+                       WHERE bi_f.bill_id = """)
+                    .append(billAlias)
+                    .append(".id AND bi_f.product_id = ?")
+                    .append("""
+                     )
+                    """);
+            args.add(scope.productId());
+        }
     }
 
     private static ActivityRow mapActivity(

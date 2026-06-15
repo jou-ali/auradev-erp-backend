@@ -11,15 +11,19 @@ import com.auradev.erp.catalog.repository.ProductRepository;
 import com.auradev.erp.common.error.BusinessException;
 import com.auradev.erp.common.error.EntityNotFoundException;
 import com.auradev.erp.common.util.MoneyUtils;
+import com.auradev.erp.inventory.entity.Inventory;
 import com.auradev.erp.inventory.entity.MovementType;
 import com.auradev.erp.inventory.entity.RefType;
+import com.auradev.erp.inventory.repository.InventoryRepository;
 import com.auradev.erp.inventory.service.InventoryService;
 import com.auradev.erp.tenant.TenantContext;
 import com.auradev.erp.tenant.entity.Tenant;
 import com.auradev.erp.tenant.repository.TenantRepository;
 import com.auradev.erp.user.entity.User;
 import com.auradev.erp.user.repository.UserRepository;
+import com.auradev.erp.common.pagination.PageResponse;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Pageable;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,7 +32,9 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
@@ -45,6 +51,7 @@ public class BillingService {
     private final TenantRepository tenantRepository;
     private final UserRepository userRepository;
     private final InventoryService inventoryService;
+    private final InventoryRepository inventoryRepository;
 
     @Transactional(readOnly = true)
     public List<CustomerResponse> listCustomers() {
@@ -68,45 +75,12 @@ public class BillingService {
 
         List<ComputedLine> lines = computeLines(req.items());
         Totals totals = computeTotals(lines, req.discountMode(), req.billDiscount());
-
+        assertStockForSale(tenantId, lines, null);
         String billNo = nextBillNo(tenant);
 
-        Bill bill = new Bill();
-        bill.setTenantId(tenantId);
-        bill.setBillNo(billNo);
-        bill.setCustomerId(customer.getId());
-        bill.setCashierId(cashierId);
-        bill.setPlaceOfSupplyState(tenant.getStateCode());
-        bill.setSubtotal(totals.subtotal());
-        bill.setBillDiscount(totals.discount());
-        bill.setDiscountMode(req.discountMode());
-        bill.setCgstTotal(totals.cgst());
-        bill.setSgstTotal(totals.sgst());
-        bill.setIgstTotal(BigDecimal.ZERO);
-        bill.setRoundOff(BigDecimal.ZERO);
-        bill.setGrandTotal(totals.grandTotal());
-        bill.setPaymentStatus(paymentStatusFor(req.payment().method()));
-        bill.setStatus(BillStatus.COMPLETED);
-        bill.setCreatedBy(cashierId);
-        bill.setUpdatedBy(cashierId);
-
-        for (ComputedLine cl : lines) {
-            BillItem item = new BillItem();
-            item.setBill(bill);
-            item.setProduct(cl.product());
-            item.setProductNameSnapshot(cl.product().getName());
-            item.setSkuSnapshot(cl.product().getSku());
-            item.setQuantity(cl.quantity());
-            item.setUnitPrice(cl.unitPrice());
-            item.setLineDiscount(cl.lineDiscount());
-            item.setTaxableValue(cl.taxable());
-            item.setGstRate(cl.gstRate());
-            item.setCgstAmount(cl.cgst());
-            item.setSgstAmount(cl.sgst());
-            item.setIgstAmount(BigDecimal.ZERO);
-            item.setLineTotal(cl.lineTotal());
-            bill.getItems().add(item);
-        }
+        Bill bill = buildBillEntity(
+                tenantId, cashierId, tenant, customer, lines, totals,
+                req.discountMode(), billNo, BillStatus.COMPLETED, paymentStatusFor(req.payment().method()));
 
         addPayments(bill, req.payment(), totals.grandTotal());
 
@@ -127,7 +101,209 @@ public class BillingService {
             customerRepository.save(customer);
         }
 
-        return toBillResponse(saved, customer, cashier, req.payment());
+        return toBillResponse(saved, customer, cashier, BillStatus.COMPLETED, req.discountMode(), req.payment());
+    }
+
+    public BillResponse holdBill(HoldBillRequest req) {
+        UUID tenantId = TenantContext.require();
+        UserPrincipal principal = requirePrincipal();
+        UUID cashierId = principal.getId();
+
+        Tenant tenant = tenantRepository.findById(tenantId)
+                .orElseThrow(() -> new EntityNotFoundException("Tenant", tenantId));
+
+        Customer customer = resolveCustomer(tenantId, req.customerId());
+        User cashier = userRepository.findById(cashierId)
+                .orElseThrow(() -> new EntityNotFoundException("User", cashierId));
+
+        List<ComputedLine> lines = computeLines(req.items());
+        Totals totals = computeTotals(lines, req.discountMode(), req.billDiscount());
+        assertStockForSale(tenantId, lines, null);
+
+        Bill bill = buildBillEntity(
+                tenantId, cashierId, tenant, customer, lines, totals,
+                req.discountMode(), nextParkRef(tenant), BillStatus.HELD, BillPaymentStatus.PARTIAL);
+
+        Bill saved = billRepository.save(bill);
+        return toBillResponse(saved, customer, cashier, BillStatus.HELD, req.discountMode(), null);
+    }
+
+    @Transactional(readOnly = true)
+    public List<HeldBillSummaryResponse> listHeldBills() {
+        UUID tenantId = TenantContext.require();
+        return billRepository.findByTenantIdAndStatusOrderByUpdatedAtDesc(tenantId, BillStatus.HELD).stream()
+                .map(b -> {
+                    Customer customer = customerRepository.findById(b.getCustomerId())
+                            .orElseThrow(() -> new EntityNotFoundException("Customer", b.getCustomerId()));
+                    return new HeldBillSummaryResponse(
+                            b.getId(),
+                            b.getBillNo(),
+                            customer.getName(),
+                            b.getItems().size(),
+                            b.getGrandTotal(),
+                            b.getUpdatedAt());
+                })
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<BillSummaryResponse> listCompletedBills(String q, Pageable pageable) {
+        UUID tenantId = TenantContext.require();
+        var page = billRepository.searchCompletedSummaries(
+                tenantId, BillStatus.COMPLETED, blankToNull(q), pageable);
+        return PageResponse.of(page);
+    }
+
+    @Transactional(readOnly = true)
+    public BillResponse getBill(UUID id) {
+        UUID tenantId = TenantContext.require();
+        Bill bill = billRepository.findByIdAndTenantIdAndStatus(id, tenantId, BillStatus.COMPLETED)
+                .orElseThrow(() -> new EntityNotFoundException("Bill", id));
+        bill.getPayments().size();
+        Customer customer = customerRepository.findById(bill.getCustomerId())
+                .orElseThrow(() -> new EntityNotFoundException("Customer", bill.getCustomerId()));
+        User cashier = userRepository.findById(bill.getCashierId())
+                .orElseThrow(() -> new EntityNotFoundException("User", bill.getCashierId()));
+        return toBillResponse(bill, customer, cashier, BillStatus.COMPLETED, bill.getDiscountMode(), null);
+    }
+
+    @Transactional(readOnly = true)
+    public BillResponse getHeldBill(UUID id) {
+        UUID tenantId = TenantContext.require();
+        Bill bill = billRepository.findByIdAndTenantIdAndStatus(id, tenantId, BillStatus.HELD)
+                .orElseThrow(() -> new EntityNotFoundException("HeldBill", id));
+        Customer customer = customerRepository.findById(bill.getCustomerId())
+                .orElseThrow(() -> new EntityNotFoundException("Customer", bill.getCustomerId()));
+        User cashier = userRepository.findById(bill.getCashierId())
+                .orElseThrow(() -> new EntityNotFoundException("User", bill.getCashierId()));
+        return toBillResponse(bill, customer, cashier, BillStatus.HELD, bill.getDiscountMode(), null);
+    }
+
+    public BillResponse completeHeldBill(UUID id, CompleteHeldBillRequest req) {
+        UUID tenantId = TenantContext.require();
+        UserPrincipal principal = requirePrincipal();
+        UUID cashierId = principal.getId();
+
+        Bill bill = billRepository.findByIdAndTenantIdAndStatus(id, tenantId, BillStatus.HELD)
+                .orElseThrow(() -> new EntityNotFoundException("HeldBill", id));
+
+        Tenant tenant = tenantRepository.findById(tenantId)
+                .orElseThrow(() -> new EntityNotFoundException("Tenant", tenantId));
+        Customer customer = resolveCustomer(tenantId, req.customerId() != null ? req.customerId() : bill.getCustomerId());
+        User cashier = userRepository.findById(cashierId)
+                .orElseThrow(() -> new EntityNotFoundException("User", cashierId));
+
+        List<ComputedLine> lines = computeLines(req.items());
+        Totals totals = computeTotals(lines, req.discountMode(), req.billDiscount());
+        assertStockForSale(tenantId, lines, id);
+        String billNo = nextBillNo(tenant);
+
+        bill.getItems().clear();
+        bill.setCustomerId(customer.getId());
+        bill.setBillNo(billNo);
+        bill.setSubtotal(totals.subtotal());
+        bill.setBillDiscount(totals.discount());
+        bill.setDiscountMode(req.discountMode());
+        bill.setCgstTotal(totals.cgst());
+        bill.setSgstTotal(totals.sgst());
+        bill.setGrandTotal(totals.grandTotal());
+        bill.setPaymentStatus(paymentStatusFor(req.payment().method()));
+        bill.setStatus(BillStatus.COMPLETED);
+        bill.setUpdatedBy(cashierId);
+
+        for (ComputedLine cl : lines) {
+            bill.getItems().add(toBillItem(bill, cl));
+        }
+
+        bill.getPayments().clear();
+        addPayments(bill, req.payment(), totals.grandTotal());
+
+        Bill saved = billRepository.save(bill);
+
+        for (ComputedLine cl : lines) {
+            inventoryService.recordMovement(
+                    cl.product().getId(),
+                    MovementType.sale,
+                    cl.quantity(),
+                    RefType.bill,
+                    saved.getId(),
+                    "Sale " + billNo);
+        }
+
+        if (req.payment().method() == PaymentMethod.CREDIT) {
+            customer.setCreditBalance(customer.getCreditBalance().add(totals.grandTotal()));
+            customerRepository.save(customer);
+        }
+
+        return toBillResponse(saved, customer, cashier, BillStatus.COMPLETED, req.discountMode(), req.payment());
+    }
+
+    public void discardHeldBill(UUID id) {
+        UUID tenantId = TenantContext.require();
+        UserPrincipal principal = requirePrincipal();
+
+        Bill bill = billRepository.findByIdAndTenantIdAndStatus(id, tenantId, BillStatus.HELD)
+                .orElseThrow(() -> new EntityNotFoundException("HeldBill", id));
+
+        bill.setStatus(BillStatus.VOID);
+        bill.setPaymentStatus(BillPaymentStatus.VOID);
+        bill.setUpdatedBy(principal.getId());
+        billRepository.save(bill);
+    }
+
+    private Bill buildBillEntity(
+            UUID tenantId,
+            UUID cashierId,
+            Tenant tenant,
+            Customer customer,
+            List<ComputedLine> lines,
+            Totals totals,
+            DiscountMode discountMode,
+            String billNo,
+            BillStatus status,
+            BillPaymentStatus paymentStatus) {
+
+        Bill bill = new Bill();
+        bill.setTenantId(tenantId);
+        bill.setBillNo(billNo);
+        bill.setCustomerId(customer.getId());
+        bill.setCashierId(cashierId);
+        bill.setPlaceOfSupplyState(tenant.getStateCode());
+        bill.setSubtotal(totals.subtotal());
+        bill.setBillDiscount(totals.discount());
+        bill.setDiscountMode(discountMode);
+        bill.setCgstTotal(totals.cgst());
+        bill.setSgstTotal(totals.sgst());
+        bill.setIgstTotal(BigDecimal.ZERO);
+        bill.setRoundOff(BigDecimal.ZERO);
+        bill.setGrandTotal(totals.grandTotal());
+        bill.setPaymentStatus(paymentStatus);
+        bill.setStatus(status);
+        bill.setCreatedBy(cashierId);
+        bill.setUpdatedBy(cashierId);
+
+        for (ComputedLine cl : lines) {
+            bill.getItems().add(toBillItem(bill, cl));
+        }
+        return bill;
+    }
+
+    private BillItem toBillItem(Bill bill, ComputedLine cl) {
+        BillItem item = new BillItem();
+        item.setBill(bill);
+        item.setProduct(cl.product());
+        item.setProductNameSnapshot(cl.product().getName());
+        item.setSkuSnapshot(cl.product().getSku());
+        item.setQuantity(cl.quantity());
+        item.setUnitPrice(cl.unitPrice());
+        item.setLineDiscount(cl.lineDiscount());
+        item.setTaxableValue(cl.taxable());
+        item.setGstRate(cl.gstRate());
+        item.setCgstAmount(cl.cgst());
+        item.setSgstAmount(cl.sgst());
+        item.setIgstAmount(BigDecimal.ZERO);
+        item.setLineTotal(cl.lineTotal());
+        return item;
     }
 
     private Customer resolveCustomer(UUID tenantId, UUID customerId) {
@@ -209,6 +385,62 @@ public class BillingService {
         return tenant.getBillNoPrefix() + "-" + fy + "-" + String.format("%05d", seq.getLastNo());
     }
 
+    private String nextParkRef(Tenant tenant) {
+        // bill_sequences.fy is VARCHAR(4) — use a fixed bucket key, not "PARK-2026"
+        String fy = "HOLD";
+        BillSequenceId id = new BillSequenceId(tenant.getId(), fy);
+        BillSequence seq = sequenceRepository.findForUpdate(tenant.getId(), fy)
+                .orElseGet(() -> {
+                    BillSequence created = new BillSequence();
+                    created.setId(id);
+                    created.setLastNo(0);
+                    return created;
+                });
+        seq.setLastNo(seq.getLastNo() + 1);
+        sequenceRepository.save(seq);
+        String year = String.valueOf(Instant.now().atZone(IST).getYear());
+        return "PARK-" + year + "-" + String.format("%05d", seq.getLastNo());
+    }
+
+    private void assertStockForSale(UUID tenantId, List<ComputedLine> lines, UUID excludeHeldBillId) {
+        if (lines.isEmpty()) {
+            return;
+        }
+
+        Map<UUID, BigDecimal> needed = new HashMap<>();
+        Map<UUID, Product> products = new HashMap<>();
+        for (ComputedLine line : lines) {
+            needed.merge(line.product().getId(), line.quantity(), BigDecimal::add);
+            products.putIfAbsent(line.product().getId(), line.product());
+        }
+
+        Map<UUID, BigDecimal> heldByProduct = billRepository.sumHeldQuantitiesByProduct(tenantId, excludeHeldBillId);
+
+        for (Map.Entry<UUID, BigDecimal> entry : needed.entrySet()) {
+            UUID productId = entry.getKey();
+            BigDecimal qtyNeeded = entry.getValue();
+            Product product = products.get(productId);
+
+            Inventory inv = inventoryRepository.findByTenantIdAndProductId(tenantId, productId).orElse(null);
+            BigDecimal onHand = inv != null ? inv.getQuantityOnHand() : BigDecimal.ZERO;
+            BigDecimal held = heldByProduct.getOrDefault(productId, BigDecimal.ZERO);
+            BigDecimal available = onHand.subtract(held);
+
+            if (available.compareTo(qtyNeeded) < 0) {
+                String unit = product.getUnitLabel();
+                String heldNote = held.compareTo(BigDecimal.ZERO) > 0
+                        ? " (" + held.stripTrailingZeros().toPlainString() + " " + unit + " in parked bills)"
+                        : "";
+                throw new BusinessException(
+                        "INSUFFICIENT_STOCK",
+                        product.getName() + " — only "
+                                + available.max(BigDecimal.ZERO).stripTrailingZeros().toPlainString()
+                                + " " + unit + " available"
+                                + heldNote);
+            }
+        }
+    }
+
     private void addPayments(Bill bill, PaymentInput input, BigDecimal grandTotal) {
         BigDecimal splitCash = input.splitCashAmount();
         if (splitCash != null
@@ -248,7 +480,13 @@ public class BillingService {
         return method == PaymentMethod.CREDIT ? BillPaymentStatus.CREDIT : BillPaymentStatus.PAID;
     }
 
-    private BillResponse toBillResponse(Bill bill, Customer customer, User cashier, PaymentInput payment) {
+    private BillResponse toBillResponse(
+            Bill bill,
+            Customer customer,
+            User cashier,
+            BillStatus status,
+            DiscountMode discountMode,
+            PaymentInput payment) {
         List<BillLineResponse> lines = bill.getItems().stream()
                 .map(i -> new BillLineResponse(
                         i.getProduct().getId(),
@@ -257,21 +495,30 @@ public class BillingService {
                         i.getProduct().getUnitLabel(),
                         i.getQuantity(),
                         i.getUnitPrice(),
+                        i.getLineDiscount(),
                         i.getGstRate(),
                         i.getLineTotal()))
                 .toList();
 
         Payment primary = bill.getPayments().isEmpty() ? null : bill.getPayments().get(0);
-        boolean isSplit = payment.splitCashAmount() != null
-                && payment.splitCashAmount().compareTo(BigDecimal.ZERO) > 0
-                && bill.getPayments().size() > 1;
-        PaymentMethod method = isSplit ? PaymentMethod.CASH : payment.method();
+        PaymentMethod method = null;
+        if (payment != null) {
+            boolean isSplit = payment.splitCashAmount() != null
+                    && payment.splitCashAmount().compareTo(BigDecimal.ZERO) > 0
+                    && bill.getPayments().size() > 1;
+            method = isSplit ? PaymentMethod.CASH : payment.method();
+        } else if (primary != null) {
+            method = primary.getMethod();
+        }
 
         return new BillResponse(
                 bill.getId(),
                 bill.getBillNo(),
+                customer.getId(),
                 customer.getName(),
                 cashier.getName(),
+                status,
+                discountMode,
                 bill.getSubtotal(),
                 bill.getBillDiscount(),
                 bill.getCgstTotal(),
@@ -282,6 +529,7 @@ public class BillingService {
                 primary != null ? primary.getTendered() : null,
                 primary != null ? primary.getChangeDue() : null,
                 bill.getCreatedAt(),
+                bill.getUpdatedAt(),
                 lines);
     }
 
@@ -297,6 +545,10 @@ public class BillingService {
             return up;
         }
         throw new BusinessException("UNAUTHENTICATED", "User context required");
+    }
+
+    private static String blankToNull(String q) {
+        return q == null || q.isBlank() ? null : q.trim();
     }
 
     private record ComputedLine(

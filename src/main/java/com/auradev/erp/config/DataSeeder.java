@@ -8,6 +8,8 @@ import com.auradev.erp.catalog.entity.Product;
 import com.auradev.erp.catalog.entity.UnitType;
 import com.auradev.erp.catalog.repository.CategoryRepository;
 import com.auradev.erp.catalog.repository.ProductRepository;
+import com.auradev.erp.catalog.repository.SupplierRepository;
+import com.auradev.erp.catalog.entity.Supplier;
 import com.auradev.erp.inventory.entity.Inventory;
 import com.auradev.erp.inventory.repository.InventoryRepository;
 import com.auradev.erp.tenant.entity.Tenant;
@@ -40,7 +42,7 @@ public class DataSeeder implements ApplicationRunner {
             {"Dairy", "dairy"},
             {"Beverages", "beverages"},
             {"Personal Care", "personal-care"},
-            {"Snacks", "snacks"}
+            {"Snacks", "snacks"},
     };
 
     private record SeedProduct(String name, String sku, String barcode, String categorySlug,
@@ -68,6 +70,7 @@ public class DataSeeder implements ApplicationRunner {
     private final ProductRepository productRepository;
     private final InventoryRepository inventoryRepository;
     private final CustomerRepository customerRepository;
+    private final SupplierRepository supplierRepository;
     private final PasswordEncoder passwordEncoder;
 
     @Override
@@ -77,6 +80,7 @@ public class DataSeeder implements ApplicationRunner {
                 : createTenant();
 
         seedCategories();
+        seedSuppliers();
         seedProducts(tenant);
         seedCustomers(tenant);
 
@@ -104,15 +108,43 @@ public class DataSeeder implements ApplicationRunner {
     }
 
     private void seedCategories() {
-        if (categoryRepository.count() > 0) return;
+        int added = 0;
         for (String[] row : SEED_CATEGORIES) {
+            if (categoryRepository.findBySlug(row[1]).isPresent()) continue;
             Category cat = new Category();
             cat.setName(row[0]);
             cat.setSlug(row[1]);
             cat.setActive(true);
             categoryRepository.save(cat);
+            added++;
         }
-        log.info("Seeded {} categories", SEED_CATEGORIES.length);
+        if (added > 0) {
+            log.info("Seeded {} categories ({} total defined)", added, SEED_CATEGORIES.length);
+        }
+    }
+
+    private void seedSuppliers() {
+        if (supplierRepository.count() > 0) return;
+
+        Object[][] rows = {
+                {"Sri Venkateshwara Distributors", "Ravi", "9845012345", "29AABCS1234F1Z5", "Hubballi"},
+                {"Nandini Dairy Depot", "Suresh", "9901234567", "29AABCN5678G1Z2", "Dharwad"},
+                {"Britannia & Parle Agencies", "Manoj", "9448876543", "29AABCB9012H1Z8", "Belagavi"},
+                {"Coastal Beverages Co.", "Deepa", "9731987654", "29AABCC3456J1Z1", "Mangaluru"},
+                {"Karnataka Grocery Wholesale", "Prakash", "9880011223", "29AABCK7890K1Z4", "Bengaluru"},
+        };
+
+        for (Object[] row : rows) {
+            Supplier s = new Supplier();
+            s.setName((String) row[0]);
+            s.setContactPerson((String) row[1]);
+            s.setPhone((String) row[2]);
+            s.setGstin((String) row[3]);
+            s.setAddress((String) row[4]);
+            s.setActive(true);
+            supplierRepository.save(s);
+        }
+        log.info("Seeded {} suppliers", rows.length);
     }
 
     private void seedProducts(Tenant tenant) {

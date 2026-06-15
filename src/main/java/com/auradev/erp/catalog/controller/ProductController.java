@@ -23,6 +23,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -65,6 +66,14 @@ public class ProductController {
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<ProductResponse> getByBarcode(@PathVariable String barcode) {
         return ResponseEntity.ok(catalogService.getByBarcode(barcode));
+    }
+
+    @GetMapping("/pos/quick-picks")
+    @Operation(summary = "POS quick picks", description = "Top sellers (7 days) with catalogue fallback for scanner-first checkout")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<List<ProductResponse>> posQuickPicks(
+            @RequestParam(defaultValue = "12") int limit) {
+        return ResponseEntity.ok(catalogService.listPosQuickPicks(TenantContext.require(), limit));
     }
 
     @GetMapping("/{id}")
