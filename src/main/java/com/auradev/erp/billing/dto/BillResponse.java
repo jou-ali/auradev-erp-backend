@@ -1,6 +1,8 @@
 package com.auradev.erp.billing.dto;
 
 import com.auradev.erp.billing.entity.BillPaymentStatus;
+import com.auradev.erp.billing.entity.BillStatus;
+import com.auradev.erp.billing.entity.DiscountMode;
 import com.auradev.erp.billing.entity.PaymentMethod;
 
 import java.math.BigDecimal;
@@ -11,8 +13,11 @@ import java.util.UUID;
 public record BillResponse(
         UUID id,
         String billNo,
+        UUID customerId,
         String customerName,
         String cashierName,
+        BillStatus status,
+        DiscountMode discountMode,
         BigDecimal subtotal,
         BigDecimal billDiscount,
         BigDecimal cgstTotal,
@@ -23,5 +28,6 @@ public record BillResponse(
         BigDecimal tendered,
         BigDecimal changeDue,
         Instant createdAt,
+        Instant updatedAt,
         List<BillLineResponse> lines
 ) {}

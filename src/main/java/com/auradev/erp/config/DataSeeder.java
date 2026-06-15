@@ -40,7 +40,7 @@ public class DataSeeder implements ApplicationRunner {
             {"Dairy", "dairy"},
             {"Beverages", "beverages"},
             {"Personal Care", "personal-care"},
-            {"Snacks", "snacks"}
+            {"Snacks", "snacks"},
     };
 
     private record SeedProduct(String name, String sku, String barcode, String categorySlug,
@@ -104,15 +104,19 @@ public class DataSeeder implements ApplicationRunner {
     }
 
     private void seedCategories() {
-        if (categoryRepository.count() > 0) return;
+        int added = 0;
         for (String[] row : SEED_CATEGORIES) {
+            if (categoryRepository.findBySlug(row[1]).isPresent()) continue;
             Category cat = new Category();
             cat.setName(row[0]);
             cat.setSlug(row[1]);
             cat.setActive(true);
             categoryRepository.save(cat);
+            added++;
         }
-        log.info("Seeded {} categories", SEED_CATEGORIES.length);
+        if (added > 0) {
+            log.info("Seeded {} categories ({} total defined)", added, SEED_CATEGORIES.length);
+        }
     }
 
     private void seedProducts(Tenant tenant) {

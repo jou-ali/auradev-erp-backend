@@ -259,11 +259,17 @@ public class GlobalExceptionHandler {
         log.warn("Data integrity violation at {}: {}", request.getRequestURI(),
                 ex.getMostSpecificCause().getMessage());
 
+        String cause = ex.getMostSpecificCause().getMessage();
+        String detail = "The request conflicts with the current state of the resource";
+        if (cause != null && cause.contains("value too long")) {
+            detail = "A database field limit was exceeded — contact support if this persists";
+        }
+
         ApiError body = ApiError.builder()
                 .type("https://erp.auradev.com/problems/conflict")
                 .title("Conflict")
                 .status(HttpStatus.CONFLICT.value())
-                .detail("The request conflicts with the current state of the resource")
+                .detail(detail)
                 .code("CONFLICT")
                 .instance(request.getRequestURI())
                 .timestamp(Instant.now())

@@ -10,6 +10,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -20,6 +21,14 @@ public interface InventoryRepository extends JpaRepository<Inventory, UUID> {
     Optional<Inventory> findByTenantIdAndProductId(UUID tenantId, UUID productId);
 
     List<Inventory> findByTenantId(UUID tenantId);
+
+    @Query("""
+            SELECT i FROM Inventory i
+            WHERE i.tenantId = :tenantId AND i.product.id IN :productIds
+            """)
+    List<Inventory> findByTenantIdAndProductIdIn(
+            @Param("tenantId") UUID tenantId,
+            @Param("productIds") Collection<UUID> productIds);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT i FROM Inventory i WHERE i.tenantId = :tenantId AND i.product.id = :productId")

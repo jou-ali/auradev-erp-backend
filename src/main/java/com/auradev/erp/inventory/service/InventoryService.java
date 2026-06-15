@@ -93,9 +93,9 @@ public class InventoryService {
 
     public void ensureInventoryRow(UUID tenantId, UUID productId, BigDecimal initialStock,
                                    BigDecimal lowStockThreshold, BigDecimal reorderQuantity) {
-        inventoryRepository.findByTenantIdAndProductId(tenantId, productId).ifPresent(inv -> {
-            throw new BusinessException("INVENTORY_EXISTS", "Inventory row already exists for product " + productId);
-        });
+        if (inventoryRepository.findByTenantIdAndProductId(tenantId, productId).isPresent()) {
+            return;
+        }
 
         Product product = productRepository.findById(productId)
                 .orElseThrow(() -> new EntityNotFoundException("Product", productId));

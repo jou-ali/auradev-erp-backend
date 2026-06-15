@@ -2,15 +2,12 @@ package com.auradev.erp.dashboard.dto;
 
 import java.util.List;
 
-public record DashboardResponse(
-        String tenantName,
-        String userName,
+/** Filter-dependent dashboard slice — reload when period or dimensions change. */
+public record DashboardMetricsResponse(
         DashboardMeta meta,
         DashboardKpis kpis,
         List<SalesDayPoint> salesTrend,
         List<TopProductPoint> topProducts,
         List<RecentBillRow> recentBills,
-        List<LowStockRow> lowStock,
-        List<ActivityRow> activity,
         String aiBrief
 ) {}
