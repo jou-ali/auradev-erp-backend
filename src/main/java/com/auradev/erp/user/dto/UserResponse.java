@@ -4,6 +4,7 @@ import com.auradev.erp.user.entity.UserRole;
 import com.auradev.erp.user.entity.UserStatus;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -19,6 +20,7 @@ import java.util.UUID;
  * @param status      whether the account is ACTIVE or INACTIVE
  * @param lastLoginAt timestamp of the most recent successful login, or {@code null}
  * @param createdAt   when the account was created
+ * @param permissions permission names granted to this user's role
  */
 public record UserResponse(
         UUID id,
@@ -27,5 +29,6 @@ public record UserResponse(
         UserRole role,
         UserStatus status,
         Instant lastLoginAt,
-        Instant createdAt
+        Instant createdAt,
+        List<String> permissions
 ) {}

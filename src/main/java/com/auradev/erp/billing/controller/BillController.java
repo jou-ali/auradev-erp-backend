@@ -27,7 +27,7 @@ public class BillController {
 
     @GetMapping
     @Operation(summary = "List completed bills", description = "Paginated sales bill history")
-    @PreAuthorize("hasAnyRole('CASHIER','MANAGER','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'BILL_VIEW')")
     public ResponseEntity<PageResponse<BillSummaryResponse>> list(
             @RequestParam(required = false) String q,
             @PageableDefault(size = 25) Pageable pageable) {
@@ -36,14 +36,14 @@ public class BillController {
 
     @GetMapping("/{id}")
     @Operation(summary = "Get bill", description = "Full bill with line items for reprint")
-    @PreAuthorize("hasAnyRole('CASHIER','MANAGER','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'BILL_VIEW')")
     public ResponseEntity<BillResponse> get(@PathVariable UUID id) {
         return ResponseEntity.ok(billingService.getBill(id));
     }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    @PreAuthorize("hasAnyRole('CASHIER','MANAGER','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'BILL_CREATE')")
     public ResponseEntity<BillResponse> create(@Valid @RequestBody CreateBillRequest req) {
         return ResponseEntity.status(HttpStatus.CREATED).body(billingService.createBill(req));
     }
@@ -51,25 +51,25 @@ public class BillController {
     @PostMapping("/hold")
     @ResponseStatus(HttpStatus.CREATED)
     @Operation(summary = "Park bill", description = "Save current cart as HELD — no stock movement or payment until completed")
-    @PreAuthorize("hasAnyRole('CASHIER','MANAGER','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'BILL_HOLD')")
     public ResponseEntity<BillResponse> hold(@Valid @RequestBody HoldBillRequest req) {
         return ResponseEntity.status(HttpStatus.CREATED).body(billingService.holdBill(req));
     }
 
     @GetMapping("/held")
-    @PreAuthorize("hasAnyRole('CASHIER','MANAGER','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'BILL_HOLD')")
     public ResponseEntity<List<HeldBillSummaryResponse>> listHeld() {
         return ResponseEntity.ok(billingService.listHeldBills());
     }
 
     @GetMapping("/held/{id}")
-    @PreAuthorize("hasAnyRole('CASHIER','MANAGER','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'BILL_HOLD')")
     public ResponseEntity<BillResponse> getHeld(@PathVariable UUID id) {
         return ResponseEntity.ok(billingService.getHeldBill(id));
     }
 
     @PostMapping("/held/{id}/complete")
-    @PreAuthorize("hasAnyRole('CASHIER','MANAGER','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'BILL_CREATE')")
     public ResponseEntity<BillResponse> completeHeld(
             @PathVariable UUID id,
             @Valid @RequestBody CompleteHeldBillRequest req) {
@@ -78,7 +78,7 @@ public class BillController {
 
     @DeleteMapping("/held/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    @PreAuthorize("hasAnyRole('CASHIER','MANAGER','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'BILL_HOLD')")
     public ResponseEntity<Void> discardHeld(@PathVariable UUID id) {
         billingService.discardHeldBill(id);
         return ResponseEntity.noContent().build();

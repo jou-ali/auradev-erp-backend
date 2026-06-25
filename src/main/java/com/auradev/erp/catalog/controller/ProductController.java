@@ -36,7 +36,7 @@ public class ProductController {
     private final InventoryService inventoryService;
 
     @GetMapping
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("@authz.can(authentication, 'INVENTORY_VIEW')")
     public ResponseEntity<PageResponse<ProductResponse>> list(
             @RequestParam(required = false) String q,
             @RequestParam(required = false) String category,
@@ -48,7 +48,7 @@ public class ProductController {
     }
 
     @GetMapping("/export/csv")
-    @PreAuthorize("hasAnyRole('MANAGER','ACCOUNTANT','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'INVENTORY_EXPORT')")
     public ResponseEntity<byte[]> exportCsv(
             @RequestParam(required = false) String q,
             @RequestParam(required = false) String category,
@@ -63,27 +63,27 @@ public class ProductController {
     }
 
     @GetMapping("/barcode/{barcode}")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("@authz.canAny(authentication, 'INVENTORY_VIEW', 'BILL_CREATE')")
     public ResponseEntity<ProductResponse> getByBarcode(@PathVariable String barcode) {
         return ResponseEntity.ok(catalogService.getByBarcode(barcode));
     }
 
     @GetMapping("/pos/quick-picks")
     @Operation(summary = "POS quick picks", description = "Top sellers (7 days) with catalogue fallback for scanner-first checkout")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("@authz.can(authentication, 'BILL_CREATE')")
     public ResponseEntity<List<ProductResponse>> posQuickPicks(
             @RequestParam(defaultValue = "12") int limit) {
         return ResponseEntity.ok(catalogService.listPosQuickPicks(TenantContext.require(), limit));
     }
 
     @GetMapping("/{id}")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("@authz.can(authentication, 'INVENTORY_VIEW')")
     public ResponseEntity<ProductResponse> get(@PathVariable UUID id) {
         return ResponseEntity.ok(catalogService.getProduct(id));
     }
 
     @GetMapping("/{id}/movements")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("@authz.can(authentication, 'INVENTORY_VIEW')")
     public ResponseEntity<PageResponse<StockMovementResponse>> movements(
             @PathVariable UUID id,
             @PageableDefault(size = 50, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
@@ -92,13 +92,13 @@ public class ProductController {
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    @PreAuthorize("hasAnyRole('MANAGER','INVENTORY_STAFF','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.canAny(authentication, 'INVENTORY_EDIT', 'PRODUCT_MANAGE')")
     public ResponseEntity<ProductResponse> create(@Valid @RequestBody CreateProductRequest req) {
         return ResponseEntity.status(HttpStatus.CREATED).body(catalogService.createProduct(req));
     }
 
     @PutMapping("/{id}")
-    @PreAuthorize("hasAnyRole('MANAGER','INVENTORY_STAFF','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.canAny(authentication, 'INVENTORY_EDIT', 'PRODUCT_MANAGE')")
     public ResponseEntity<ProductResponse> update(
             @PathVariable UUID id,
             @Valid @RequestBody UpdateProductRequest req) {
@@ -106,14 +106,14 @@ public class ProductController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAnyRole('MANAGER','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'PRODUCT_MANAGE')")
     public ResponseEntity<Void> delete(@PathVariable UUID id) {
         catalogService.deleteProduct(id);
         return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/{id}/stock-adjust")
-    @PreAuthorize("hasAnyRole('MANAGER','INVENTORY_STAFF','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'INVENTORY_EDIT')")
     public ResponseEntity<Void> adjustStock(
             @PathVariable UUID id,
             @Valid @RequestBody ProductStockAdjustBody req) {

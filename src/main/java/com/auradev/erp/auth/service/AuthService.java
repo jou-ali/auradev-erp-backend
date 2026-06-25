@@ -1,5 +1,6 @@
 package com.auradev.erp.auth.service;
 
+import com.auradev.erp.audit.service.AuditService;
 import com.auradev.erp.auth.dto.LoginRequest;
 import com.auradev.erp.auth.dto.LoginResponse;
 import com.auradev.erp.auth.dto.RefreshRequest;
@@ -8,6 +9,7 @@ import com.auradev.erp.auth.repository.RefreshTokenRepository;
 import com.auradev.erp.auth.security.JwtService;
 import com.auradev.erp.auth.security.UserPrincipal;
 import com.auradev.erp.user.dto.UserResponse;
+import com.auradev.erp.user.dto.UserResponseMapper;
 import com.auradev.erp.user.entity.User;
 import com.auradev.erp.user.entity.UserStatus;
 import com.auradev.erp.user.repository.UserRepository;
@@ -51,6 +53,7 @@ public class AuthService {
     private final JwtService              jwtService;
     private final PasswordEncoder         passwordEncoder;
     private final RefreshTokenRepository  refreshTokenRepository;
+    private final AuditService            auditService;
 
     @Value("${app.jwt.refresh-token-expiry-ms}")
     private long refreshExpiryMs;
@@ -84,7 +87,7 @@ public class AuthService {
      * @throws ResponseStatusException HTTP 401 if credentials are invalid or
      *                                 the account is inactive
      */
-    public LoginResponse login(LoginRequest req) {
+    public LoginResponse login(LoginRequest req, String clientIp) {
         User user = userRepository.findByEmail(req.email())
                 .orElseThrow(() -> unauthorised("Invalid credentials"));
 
@@ -105,6 +108,8 @@ public class AuthService {
 
         user.setLastLoginAt(Instant.now());
         userRepository.save(user);
+
+        auditService.logForUser(user, "LOGIN_SUCCESS", "user", user.getId(), null, clientIp);
 
         return buildLoginResponse(accessToken, refreshToken, user);
     }
@@ -182,15 +187,7 @@ public class AuthService {
     }
 
     private LoginResponse buildLoginResponse(String accessToken, String refreshToken, User user) {
-        UserResponse userResponse = new UserResponse(
-                user.getId(),
-                user.getName(),
-                user.getEmail(),
-                user.getRole(),
-                user.getStatus(),
-                user.getLastLoginAt(),
-                user.getCreatedAt()
-        );
+        UserResponse userResponse = UserResponseMapper.from(user);
         return new LoginResponse(
                 accessToken,
                 refreshToken,

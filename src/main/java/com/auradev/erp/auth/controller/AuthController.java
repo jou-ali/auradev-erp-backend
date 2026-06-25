@@ -6,8 +6,11 @@ import com.auradev.erp.auth.dto.RefreshRequest;
 import com.auradev.erp.auth.security.UserPrincipal;
 import com.auradev.erp.auth.service.AuthService;
 import com.auradev.erp.user.dto.UserResponse;
+import com.auradev.erp.user.dto.UserResponseMapper;
 import com.auradev.erp.user.entity.User;
 import com.auradev.erp.user.repository.UserRepository;
+import com.auradev.erp.common.web.RequestIpHelper;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -52,8 +55,10 @@ public class AuthController {
      * @return HTTP 200 with {@link LoginResponse}
      */
     @PostMapping("/login")
-    public ResponseEntity<LoginResponse> login(@Valid @RequestBody LoginRequest req) {
-        return ResponseEntity.ok(authService.login(req));
+    public ResponseEntity<LoginResponse> login(
+            @Valid @RequestBody LoginRequest req,
+            HttpServletRequest request) {
+        return ResponseEntity.ok(authService.login(req, RequestIpHelper.clientIp(request)));
     }
 
     /**
@@ -104,16 +109,7 @@ public class AuthController {
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.UNAUTHORIZED, "User not found"));
 
-        UserResponse response = new UserResponse(
-                user.getId(),
-                user.getName(),
-                user.getEmail(),
-                user.getRole(),
-                user.getStatus(),
-                user.getLastLoginAt(),
-                user.getCreatedAt()
-        );
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok(UserResponseMapper.from(user));
     }
 
 }

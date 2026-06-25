@@ -55,6 +55,7 @@ public class SecurityConfig {
             "/swagger-ui.html",
             "/api-docs/**",
             "/v3/api-docs/**",
+            "/uploads/**",
             "/api/v1/inventory/import/template",
             "/api/v1/inventory/import/sample",
             "/api/v1/inventory/import/stock-sample"

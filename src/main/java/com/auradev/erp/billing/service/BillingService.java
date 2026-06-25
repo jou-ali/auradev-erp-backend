@@ -1,5 +1,6 @@
 package com.auradev.erp.billing.service;
 
+import com.auradev.erp.audit.service.AuditService;
 import com.auradev.erp.auth.security.UserPrincipal;
 import com.auradev.erp.billing.dto.*;
 import com.auradev.erp.billing.entity.*;
@@ -16,10 +17,13 @@ import com.auradev.erp.inventory.entity.MovementType;
 import com.auradev.erp.inventory.entity.RefType;
 import com.auradev.erp.inventory.repository.InventoryRepository;
 import com.auradev.erp.inventory.service.InventoryService;
+import com.auradev.erp.settings.model.BillingConfig;
+import com.auradev.erp.settings.service.SettingsService;
 import com.auradev.erp.tenant.TenantContext;
 import com.auradev.erp.tenant.entity.Tenant;
 import com.auradev.erp.tenant.repository.TenantRepository;
 import com.auradev.erp.user.entity.User;
+import com.auradev.erp.user.entity.UserRole;
 import com.auradev.erp.user.repository.UserRepository;
 import com.auradev.erp.common.pagination.PageResponse;
 import lombok.RequiredArgsConstructor;
@@ -52,6 +56,8 @@ public class BillingService {
     private final UserRepository userRepository;
     private final InventoryService inventoryService;
     private final InventoryRepository inventoryRepository;
+    private final AuditService auditService;
+    private final SettingsService settingsService;
 
     @Transactional(readOnly = true)
     public List<CustomerResponse> listCustomers() {
@@ -75,6 +81,7 @@ public class BillingService {
 
         List<ComputedLine> lines = computeLines(req.items());
         Totals totals = computeTotals(lines, req.discountMode(), req.billDiscount());
+        assertBillingRules(principal.getRole(), req.discountMode(), req.billDiscount(), req.payment(), lines, totals);
         assertStockForSale(tenantId, lines, null);
         String billNo = nextBillNo(tenant);
 
@@ -101,12 +108,21 @@ public class BillingService {
             customerRepository.save(customer);
         }
 
+        auditService.log("BILL_CREATED", "bill", saved.getId(), Map.of(
+                "billNo", billNo,
+                "grandTotal", totals.grandTotal(),
+                "customer", customer.getName()));
+
         return toBillResponse(saved, customer, cashier, BillStatus.COMPLETED, req.discountMode(), req.payment());
     }
 
     public BillResponse holdBill(HoldBillRequest req) {
         UUID tenantId = TenantContext.require();
         UserPrincipal principal = requirePrincipal();
+        BillingConfig billing = settingsService.getBillingConfig();
+        if (!billing.allowHoldBill()) {
+            throw new BusinessException("HOLD_DISABLED", "Bill hold is disabled in billing settings");
+        }
         UUID cashierId = principal.getId();
 
         Tenant tenant = tenantRepository.findById(tenantId)
@@ -195,6 +211,7 @@ public class BillingService {
 
         List<ComputedLine> lines = computeLines(req.items());
         Totals totals = computeTotals(lines, req.discountMode(), req.billDiscount());
+        assertBillingRules(principal.getRole(), req.discountMode(), req.billDiscount(), req.payment(), lines, totals);
         assertStockForSale(tenantId, lines, id);
         String billNo = nextBillNo(tenant);
 
@@ -304,6 +321,56 @@ public class BillingService {
         item.setIgstAmount(BigDecimal.ZERO);
         item.setLineTotal(cl.lineTotal());
         return item;
+    }
+
+    private void assertBillingRules(
+            UserRole role,
+            DiscountMode discountMode,
+            BigDecimal billDiscount,
+            PaymentInput payment,
+            List<ComputedLine> lines,
+            Totals totals) {
+        BillingConfig billing = settingsService.getBillingConfig();
+
+        if (payment != null && payment.method() == PaymentMethod.CREDIT && !billing.allowCreditSales()) {
+            throw new BusinessException("CREDIT_DISABLED", "Credit sales are disabled in billing settings");
+        }
+
+        for (ComputedLine line : lines) {
+            if (line.lineDiscount().compareTo(BigDecimal.ZERO) <= 0) continue;
+            BigDecimal gross = MoneyUtils.roundHalfUp2(line.unitPrice().multiply(line.quantity()));
+            if (gross.compareTo(BigDecimal.ZERO) <= 0) continue;
+            BigDecimal pct = line.lineDiscount()
+                    .multiply(new BigDecimal("100"))
+                    .divide(gross, 2, java.math.RoundingMode.HALF_UP);
+            if (pct.compareTo(new BigDecimal(billing.maxLineDiscountPercent())) > 0) {
+                throw new BusinessException(
+                        "LINE_DISCOUNT_EXCEEDED",
+                        "Line discount exceeds the allowed maximum of " + billing.maxLineDiscountPercent() + "%");
+            }
+        }
+
+        if (totals.discount().compareTo(BigDecimal.ZERO) <= 0) return;
+
+        BigDecimal billDiscountPct;
+        if (discountMode == DiscountMode.PERCENT) {
+            billDiscountPct = billDiscount != null ? billDiscount : BigDecimal.ZERO;
+        } else if (totals.subtotal().compareTo(BigDecimal.ZERO) > 0) {
+            billDiscountPct = totals.discount()
+                    .multiply(new BigDecimal("100"))
+                    .divide(totals.subtotal(), 2, java.math.RoundingMode.HALF_UP);
+        } else {
+            billDiscountPct = BigDecimal.ZERO;
+        }
+
+        int allowed = role == UserRole.CASHIER
+                ? billing.cashierMaxBillDiscountPercent()
+                : billing.maxBillDiscountPercent();
+        if (billDiscountPct.compareTo(new BigDecimal(allowed)) > 0) {
+            throw new BusinessException(
+                    "BILL_DISCOUNT_EXCEEDED",
+                    "Bill discount exceeds the allowed maximum of " + allowed + "% for your role");
+        }
     }
 
     private Customer resolveCustomer(UUID tenantId, UUID customerId) {

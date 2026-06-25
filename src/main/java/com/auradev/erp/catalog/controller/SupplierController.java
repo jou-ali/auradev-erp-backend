@@ -30,20 +30,20 @@ public class SupplierController {
     private final SupplierImportService supplierImportService;
 
     @GetMapping
-    @PreAuthorize("hasAnyRole('MANAGER','INVENTORY_STAFF','TENANT_ADMIN','SUPER_ADMIN','CASHIER')")
+    @PreAuthorize("@authz.canAny(authentication, 'PURCHASE_VIEW', 'SUPPLIER_MANAGE')")
     public ResponseEntity<List<SupplierResponse>> list() {
         return ResponseEntity.ok(catalogService.listSuppliers());
     }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    @PreAuthorize("hasAnyRole('MANAGER','INVENTORY_STAFF','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'SUPPLIER_MANAGE')")
     public ResponseEntity<SupplierResponse> create(@Valid @RequestBody CreateSupplierRequest req) {
         return ResponseEntity.status(HttpStatus.CREATED).body(catalogService.createSupplier(req));
     }
 
     @PutMapping("/{id}")
-    @PreAuthorize("hasAnyRole('MANAGER','INVENTORY_STAFF','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'SUPPLIER_MANAGE')")
     public ResponseEntity<SupplierResponse> update(
             @PathVariable UUID id,
             @Valid @RequestBody CreateSupplierRequest req) {
@@ -51,7 +51,7 @@ public class SupplierController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAnyRole('MANAGER','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'SUPPLIER_MANAGE')")
     public ResponseEntity<Void> delete(@PathVariable UUID id) {
         catalogService.deleteSupplier(id);
         return ResponseEntity.noContent().build();
@@ -59,7 +59,7 @@ public class SupplierController {
 
     @GetMapping("/import/template")
     @Operation(summary = "Download Excel template for bulk supplier import")
-    @PreAuthorize("hasAnyRole('MANAGER','INVENTORY_STAFF','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'SUPPLIER_MANAGE')")
     public ResponseEntity<byte[]> importTemplate() {
         byte[] bytes = supplierImportService.downloadTemplate();
         return ResponseEntity.ok()
@@ -71,7 +71,7 @@ public class SupplierController {
     }
 
     @PostMapping(value = "/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @PreAuthorize("hasAnyRole('MANAGER','INVENTORY_STAFF','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'SUPPLIER_MANAGE')")
     @Operation(summary = "Upload Excel to bulk-add suppliers")
     public ResponseEntity<SupplierImportResult> importSuppliers(@RequestParam("file") MultipartFile file) {
         return ResponseEntity.ok(supplierImportService.importFile(file));

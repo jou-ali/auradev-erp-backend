@@ -23,7 +23,7 @@ public class PurchaseImportController {
 
     @GetMapping("/template")
     @Operation(summary = "Download Excel template for bulk purchase import")
-    @PreAuthorize("hasAnyRole('MANAGER','INVENTORY_STAFF','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'PURCHASE_MANAGE')")
     public ResponseEntity<byte[]> template() {
         byte[] bytes = importService.downloadTemplate();
         return ResponseEntity.ok()
@@ -35,7 +35,7 @@ public class PurchaseImportController {
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @PreAuthorize("hasAnyRole('MANAGER','INVENTORY_STAFF','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'PURCHASE_MANAGE')")
     @Operation(summary = "Upload Excel to create draft purchase bills for one supplier")
     public ResponseEntity<PurchaseImportResult> upload(
             @RequestParam("supplierId") UUID supplierId,

@@ -56,7 +56,7 @@ public class InventoryImportController {
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @PreAuthorize("hasAnyRole('MANAGER','INVENTORY_STAFF','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'INVENTORY_IMPORT')")
     @Operation(summary = "Upload Excel file to import products (skips duplicates)")
     public ResponseEntity<InventoryImportResult> upload(@RequestParam("file") MultipartFile file) {
         return ResponseEntity.ok(importService.importFile(file));
