@@ -1,6 +1,7 @@
 package com.auradev.erp.billing.dto;
 
 import com.auradev.erp.billing.entity.DiscountMode;
+import com.auradev.erp.settings.model.GstScheme;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
@@ -13,5 +14,6 @@ public record HoldBillRequest(
         UUID customerId,
         @NotNull DiscountMode discountMode,
         BigDecimal billDiscount,
-        @NotEmpty @Valid List<BillLineRequest> items
+        @NotEmpty @Valid List<BillLineRequest> items,
+        GstScheme gstSchemeOverride
 ) {}

@@ -7,16 +7,22 @@ import com.auradev.erp.common.error.EntityNotFoundException;
 import com.auradev.erp.settings.dto.BillingSettingsResponse;
 import com.auradev.erp.settings.dto.PrinterSettingsResponse;
 import com.auradev.erp.settings.dto.StoreProfileResponse;
+import com.auradev.erp.settings.dto.TaxSettingsResponse;
 import com.auradev.erp.settings.dto.UpdateBillingSettingsRequest;
 import com.auradev.erp.settings.dto.UpdatePrinterSettingsRequest;
 import com.auradev.erp.settings.dto.UpdateStoreProfileRequest;
+import com.auradev.erp.settings.dto.UpdateTaxSettingsRequest;
 import com.auradev.erp.settings.entity.TenantSettings;
 import com.auradev.erp.settings.model.BillingConfig;
+import com.auradev.erp.settings.model.CategoryGstRate;
 import com.auradev.erp.settings.model.PrinterConfig;
+import com.auradev.erp.settings.model.TaxConfig;
 import com.auradev.erp.settings.repository.TenantSettingsRepository;
 import com.auradev.erp.tenant.TenantContext;
 import com.auradev.erp.tenant.entity.Tenant;
 import com.auradev.erp.tenant.repository.TenantRepository;
+import com.auradev.erp.catalog.entity.Category;
+import com.auradev.erp.catalog.repository.CategoryRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -25,8 +31,10 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -43,6 +51,7 @@ public class SettingsService {
 
     private final TenantRepository tenantRepository;
     private final TenantSettingsRepository tenantSettingsRepository;
+    private final CategoryRepository categoryRepository;
     private final AuditService auditService;
 
     @Value("${app.uploads.dir:uploads}")
@@ -171,6 +180,56 @@ public class SettingsService {
         return toBillingResponse(updated);
     }
 
+    @Transactional(readOnly = true)
+    public TaxSettingsResponse getTaxSettings() {
+        return toTaxResponse(loadOrCreateSettings().getTax());
+    }
+
+    @Transactional(readOnly = true)
+    public TaxConfig getTaxConfig() {
+        TaxConfig tax = loadOrCreateSettings().getTax();
+        return tax != null ? tax.normalized() : TaxConfig.defaults();
+    }
+
+    public TaxSettingsResponse updateTaxSettings(UpdateTaxSettingsRequest req) {
+        TenantSettings settings = loadOrCreateSettings();
+        TaxConfig current = settings.getTax() != null
+                ? settings.getTax().normalized()
+                : TaxConfig.defaults();
+
+        List<CategoryGstRate> categoryRates = current.categoryRates();
+        if (req.categoryRates() != null) {
+            categoryRates = req.categoryRates().stream()
+                    .map(r -> {
+                        Category cat = categoryRepository.findById(r.categoryId())
+                                .orElseThrow(() -> new BusinessException(
+                                        "UNKNOWN_CATEGORY",
+                                        "Unknown category: " + r.categoryId()));
+                        return new CategoryGstRate(cat.getId(), r.ratePct());
+                    })
+                    .toList();
+        }
+
+        TaxConfig updated = new TaxConfig(
+                req.scheme() != null ? req.scheme() : current.scheme(),
+                req.priceIncludesTax() != null ? req.priceIncludesTax() : current.priceIncludesTax(),
+                req.enabledRates() != null ? req.enabledRates() : current.enabledRates(),
+                req.compositeRatePct() != null ? req.compositeRatePct() : current.compositeRatePct(),
+                req.defaultCategoryRatePct() != null ? req.defaultCategoryRatePct() : current.defaultCategoryRatePct(),
+                categoryRates
+        ).normalized();
+
+        settings.setTax(updated);
+        settings.setUpdatedBy(currentUserId());
+        tenantSettingsRepository.save(settings);
+
+        auditService.log("TAX_SETTINGS_UPDATED", "tenant_settings", settings.getTenantId(), Map.of(
+                "scheme", updated.scheme().name(),
+                "compositeRatePct", updated.compositeRatePct(),
+                "categoryMappings", updated.categoryRates().size()));
+        return toTaxResponse(updated);
+    }
+
     private TenantSettings loadOrCreateSettings() {
         UUID tenantId = TenantContext.require();
         return tenantSettingsRepository.findById(tenantId).orElseGet(() -> {
@@ -178,6 +237,7 @@ public class SettingsService {
             created.setTenantId(tenantId);
             created.setPrinter(PrinterConfig.defaults());
             created.setBilling(BillingConfig.defaults());
+            created.setTax(TaxConfig.defaults());
             created.setUpdatedBy(currentUserId());
             return tenantSettingsRepository.save(created);
         });
@@ -200,6 +260,26 @@ public class SettingsService {
                 c.showGstBreakupOnReceipt(),
                 c.showCustomerOnReceipt(),
                 c.roundTotalToRupee());
+    }
+
+    private TaxSettingsResponse toTaxResponse(TaxConfig config) {
+        TaxConfig c = config != null ? config.normalized() : TaxConfig.defaults();
+        List<TaxSettingsResponse.CategoryGstRateResponse> rows = c.categoryRates().stream()
+                .map(row -> {
+                    String name = categoryRepository.findById(row.categoryId())
+                            .map(Category::getName)
+                            .orElse("Unknown");
+                    return new TaxSettingsResponse.CategoryGstRateResponse(
+                            row.categoryId(), name, row.ratePct());
+                })
+                .toList();
+        return new TaxSettingsResponse(
+                c.scheme(),
+                c.priceIncludesTax(),
+                c.enabledRates(),
+                c.compositeRatePct(),
+                c.defaultCategoryRatePct(),
+                rows);
     }
 
     private static UUID currentUserId() {

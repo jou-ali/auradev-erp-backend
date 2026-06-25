@@ -12,6 +12,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
+import com.auradev.erp.settings.model.GstScheme;
+
 @Getter
 @Setter
 @Entity
@@ -71,6 +73,10 @@ public class Bill extends BaseEntity {
 
     @Column(name = "receipt_url")
     private String receiptUrl;
+
+    /** GST scheme in effect when the bill was finalised (snapshot for audit / reprint). */
+    @Column(name = "gst_scheme", nullable = false, length = 20)
+    private String gstScheme = GstScheme.PRODUCT.name();
 
     @OneToMany(mappedBy = "bill", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<BillItem> items = new ArrayList<>();

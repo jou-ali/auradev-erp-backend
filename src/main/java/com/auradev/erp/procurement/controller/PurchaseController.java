@@ -67,4 +67,12 @@ public class PurchaseController {
     public ResponseEntity<PurchaseResponse> markPaid(@PathVariable UUID id) {
         return ResponseEntity.ok(purchaseService.markPaid(id));
     }
+
+    @DeleteMapping("/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @PreAuthorize("@authz.can(authentication, 'PURCHASE_MANAGE')")
+    public ResponseEntity<Void> deleteDraft(@PathVariable UUID id) {
+        purchaseService.deleteDraft(id);
+        return ResponseEntity.noContent().build();
+    }
 }

@@ -18,6 +18,7 @@ public record BillResponse(
         String cashierName,
         BillStatus status,
         DiscountMode discountMode,
+        String gstScheme,
         BigDecimal subtotal,
         BigDecimal billDiscount,
         BigDecimal cgstTotal,
@@ -29,5 +30,6 @@ public record BillResponse(
         BigDecimal changeDue,
         Instant createdAt,
         Instant updatedAt,
+        List<GstSlabSummary> gstSlabs,
         List<BillLineResponse> lines
 ) {}

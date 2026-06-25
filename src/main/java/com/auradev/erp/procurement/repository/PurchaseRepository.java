@@ -10,6 +10,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -47,4 +48,11 @@ public interface PurchaseRepository extends JpaRepository<Purchase, UUID> {
             @Param("status") PurchaseStatus status,
             @Param("supplierId") UUID supplierId,
             Pageable pageable);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(value = """
+            DELETE FROM purchases
+            WHERE id = :id AND tenant_id = :tenantId AND status = 'DRAFT'
+            """, nativeQuery = true)
+    int deleteDraftByIdAndTenantId(@Param("id") UUID id, @Param("tenantId") UUID tenantId);
 }

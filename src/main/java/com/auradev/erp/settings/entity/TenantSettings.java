@@ -2,6 +2,7 @@ package com.auradev.erp.settings.entity;
 
 import com.auradev.erp.settings.model.BillingConfig;
 import com.auradev.erp.settings.model.PrinterConfig;
+import com.auradev.erp.settings.model.TaxConfig;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
@@ -14,7 +15,6 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -30,9 +30,7 @@ public class TenantSettings {
 
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "tax", nullable = false)
-    private Map<String, Object> tax = Map.of(
-            "priceIncludesTax", false,
-            "enabledRates", List.of(0, 5, 12, 18));
+    private TaxConfig tax = TaxConfig.defaults();
 
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "payments", nullable = false)

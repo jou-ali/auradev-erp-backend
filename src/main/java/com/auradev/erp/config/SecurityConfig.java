@@ -5,6 +5,7 @@ import com.auradev.erp.auth.security.UserDetailsServiceImpl;
 import com.auradev.erp.tenant.TenantContextFilter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -64,6 +65,7 @@ public class SecurityConfig {
     private final JwtAuthFilter jwtAuthFilter;
     private final TenantContextFilter tenantContextFilter;
     private final UserDetailsServiceImpl userDetailsService;
+    private final Environment environment;
 
     @Value("${app.cors.allowed-origins}")
     private String allowedOriginsRaw;
@@ -100,8 +102,18 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        List<String> origins = Arrays.asList(allowedOriginsRaw.split(","));
-        config.setAllowedOrigins(origins.stream().map(String::trim).toList());
+        boolean devProfile = java.util.Arrays.stream(environment.getActiveProfiles())
+                .anyMatch(p -> "dev".equalsIgnoreCase(p));
+        if (devProfile) {
+            config.setAllowedOriginPatterns(List.of(
+                    "http://localhost:*",
+                    "http://127.0.0.1:*",
+                    "http://192.168.*:*",
+                    "http://10.*:*"));
+        } else {
+            List<String> origins = Arrays.asList(allowedOriginsRaw.split(","));
+            config.setAllowedOrigins(origins.stream().map(String::trim).toList());
+        }
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Tenant-Id"));
         config.setExposedHeaders(List.of("Authorization", "Content-Disposition"));

@@ -151,6 +151,21 @@ public class PurchaseService {
         return toResponse(purchaseRepository.save(purchase), loadSupplier(purchase.getSupplierId()));
     }
 
+    public void deleteDraft(UUID id) {
+        UUID tenantId = TenantContext.require();
+        Purchase purchase = purchaseRepository.findByIdAndTenantId(id, tenantId)
+                .orElseThrow(() -> new EntityNotFoundException("Purchase", id));
+
+        if (purchase.getStatus() != PurchaseStatus.DRAFT) {
+            throw new BusinessException("INVALID_STATUS", "Only draft purchases can be deleted");
+        }
+
+        int deleted = purchaseRepository.deleteDraftByIdAndTenantId(id, tenantId);
+        if (deleted == 0) {
+            throw new EntityNotFoundException("Purchase", id);
+        }
+    }
+
     private Purchase loadDraftOrPending(UUID id) {
         UUID tenantId = TenantContext.require();
         return purchaseRepository.findByIdAndTenantId(id, tenantId)

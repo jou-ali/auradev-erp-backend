@@ -1,0 +1,4 @@
+ALTER TABLE bills
+    ADD COLUMN IF NOT EXISTS gst_scheme VARCHAR(20) NOT NULL DEFAULT 'PRODUCT';
+
+COMMENT ON COLUMN bills.gst_scheme IS 'GST scheme applied at billing: PRODUCT, COMPOSITE, or CATEGORY';

@@ -8,6 +8,7 @@ import com.auradev.erp.billing.repository.BillRepository;
 import com.auradev.erp.billing.repository.BillSequenceRepository;
 import com.auradev.erp.billing.repository.CustomerRepository;
 import com.auradev.erp.catalog.entity.Product;
+import com.auradev.erp.catalog.entity.Category;
 import com.auradev.erp.catalog.repository.ProductRepository;
 import com.auradev.erp.common.error.BusinessException;
 import com.auradev.erp.common.error.EntityNotFoundException;
@@ -18,6 +19,9 @@ import com.auradev.erp.inventory.entity.RefType;
 import com.auradev.erp.inventory.repository.InventoryRepository;
 import com.auradev.erp.inventory.service.InventoryService;
 import com.auradev.erp.settings.model.BillingConfig;
+import com.auradev.erp.settings.model.GstScheme;
+import com.auradev.erp.settings.model.TaxConfig;
+import com.auradev.erp.settings.model.CategoryGstRate;
 import com.auradev.erp.settings.service.SettingsService;
 import com.auradev.erp.tenant.TenantContext;
 import com.auradev.erp.tenant.entity.Tenant;
@@ -37,8 +41,10 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.UUID;
 
 @Service
@@ -79,15 +85,17 @@ public class BillingService {
         User cashier = userRepository.findById(cashierId)
                 .orElseThrow(() -> new EntityNotFoundException("User", cashierId));
 
-        List<ComputedLine> lines = computeLines(req.items());
-        Totals totals = computeTotals(lines, req.discountMode(), req.billDiscount());
+        TaxConfig tax = effectiveTaxConfig(req.gstSchemeOverride());
+        List<ComputedLine> lines = computeLines(req.items(), tax);
+        Totals totals = computeTotals(lines, req.discountMode(), req.billDiscount(), tax);
         assertBillingRules(principal.getRole(), req.discountMode(), req.billDiscount(), req.payment(), lines, totals);
         assertStockForSale(tenantId, lines, null);
         String billNo = nextBillNo(tenant);
 
         Bill bill = buildBillEntity(
                 tenantId, cashierId, tenant, customer, lines, totals,
-                req.discountMode(), billNo, BillStatus.COMPLETED, paymentStatusFor(req.payment().method()));
+                req.discountMode(), billNo, BillStatus.COMPLETED, paymentStatusFor(req.payment().method()),
+                tax.scheme());
 
         addPayments(bill, req.payment(), totals.grandTotal());
 
@@ -132,13 +140,15 @@ public class BillingService {
         User cashier = userRepository.findById(cashierId)
                 .orElseThrow(() -> new EntityNotFoundException("User", cashierId));
 
-        List<ComputedLine> lines = computeLines(req.items());
-        Totals totals = computeTotals(lines, req.discountMode(), req.billDiscount());
+        TaxConfig tax = effectiveTaxConfig(req.gstSchemeOverride());
+        List<ComputedLine> lines = computeLines(req.items(), tax);
+        Totals totals = computeTotals(lines, req.discountMode(), req.billDiscount(), tax);
         assertStockForSale(tenantId, lines, null);
 
         Bill bill = buildBillEntity(
                 tenantId, cashierId, tenant, customer, lines, totals,
-                req.discountMode(), nextParkRef(tenant), BillStatus.HELD, BillPaymentStatus.PARTIAL);
+                req.discountMode(), nextParkRef(tenant), BillStatus.HELD, BillPaymentStatus.PARTIAL,
+                tax.scheme());
 
         Bill saved = billRepository.save(bill);
         return toBillResponse(saved, customer, cashier, BillStatus.HELD, req.discountMode(), null);
@@ -209,8 +219,9 @@ public class BillingService {
         User cashier = userRepository.findById(cashierId)
                 .orElseThrow(() -> new EntityNotFoundException("User", cashierId));
 
-        List<ComputedLine> lines = computeLines(req.items());
-        Totals totals = computeTotals(lines, req.discountMode(), req.billDiscount());
+        TaxConfig tax = effectiveTaxConfig(req.gstSchemeOverride());
+        List<ComputedLine> lines = computeLines(req.items(), tax);
+        Totals totals = computeTotals(lines, req.discountMode(), req.billDiscount(), tax);
         assertBillingRules(principal.getRole(), req.discountMode(), req.billDiscount(), req.payment(), lines, totals);
         assertStockForSale(tenantId, lines, id);
         String billNo = nextBillNo(tenant);
@@ -224,6 +235,7 @@ public class BillingService {
         bill.setCgstTotal(totals.cgst());
         bill.setSgstTotal(totals.sgst());
         bill.setGrandTotal(totals.grandTotal());
+        bill.setGstScheme(tax.scheme().name());
         bill.setPaymentStatus(paymentStatusFor(req.payment().method()));
         bill.setStatus(BillStatus.COMPLETED);
         bill.setUpdatedBy(cashierId);
@@ -278,7 +290,8 @@ public class BillingService {
             DiscountMode discountMode,
             String billNo,
             BillStatus status,
-            BillPaymentStatus paymentStatus) {
+            BillPaymentStatus paymentStatus,
+            GstScheme gstScheme) {
 
         Bill bill = new Bill();
         bill.setTenantId(tenantId);
@@ -294,6 +307,7 @@ public class BillingService {
         bill.setIgstTotal(BigDecimal.ZERO);
         bill.setRoundOff(BigDecimal.ZERO);
         bill.setGrandTotal(totals.grandTotal());
+        bill.setGstScheme(gstScheme.name());
         bill.setPaymentStatus(paymentStatus);
         bill.setStatus(status);
         bill.setCreatedBy(cashierId);
@@ -388,10 +402,10 @@ public class BillingService {
                         "Walk-in customer not configured for this tenant"));
     }
 
-    private List<ComputedLine> computeLines(List<BillLineRequest> items) {
+    private List<ComputedLine> computeLines(List<BillLineRequest> items, TaxConfig tax) {
         List<ComputedLine> result = new ArrayList<>();
         for (BillLineRequest line : items) {
-            Product product = productRepository.findById(line.productId())
+            Product product = productRepository.findWithCategoryById(line.productId())
                     .orElseThrow(() -> new EntityNotFoundException("Product", line.productId()));
             if (!product.isActive()) {
                 throw new BusinessException("PRODUCT_INACTIVE", "Product is inactive: " + product.getName());
@@ -402,28 +416,97 @@ public class BillingService {
             BigDecimal lineDisc = MoneyUtils.roundHalfUp2(
                     line.lineDiscount() != null ? line.lineDiscount() : BigDecimal.ZERO);
             BigDecimal gross = MoneyUtils.roundHalfUp2(unitPrice.multiply(qty));
-            BigDecimal taxable = MoneyUtils.roundHalfUp2(gross.subtract(lineDisc));
-            BigDecimal gst = MoneyUtils.pct(gross, product.getTaxRatePct());
+            BigDecimal netBeforeTax = MoneyUtils.roundHalfUp2(gross.subtract(lineDisc));
+
+            if (tax.scheme() == GstScheme.COMPOSITE) {
+                result.add(new ComputedLine(
+                        product, qty, unitPrice, lineDisc, netBeforeTax,
+                        BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, netBeforeTax));
+                continue;
+            }
+
+            BigDecimal gstRate = resolveGstRate(product, tax);
+            BigDecimal taxable;
+            BigDecimal gst;
+            if (tax.priceIncludesTax()) {
+                BigDecimal divisor = BigDecimal.ONE.add(
+                        gstRate.divide(new BigDecimal("100"), 6, java.math.RoundingMode.HALF_UP));
+                taxable = MoneyUtils.roundHalfUp2(netBeforeTax.divide(divisor, 2, java.math.RoundingMode.HALF_UP));
+                gst = MoneyUtils.roundHalfUp2(netBeforeTax.subtract(taxable));
+            } else {
+                taxable = netBeforeTax;
+                gst = MoneyUtils.pct(gross, gstRate);
+            }
             BigDecimal halfGst = MoneyUtils.roundHalfUp2(gst.divide(new BigDecimal("2")));
-            BigDecimal lineTotal = MoneyUtils.roundHalfUp2(gross.add(gst).subtract(lineDisc));
+            BigDecimal lineTotal = tax.priceIncludesTax()
+                    ? netBeforeTax
+                    : MoneyUtils.roundHalfUp2(gross.add(gst).subtract(lineDisc));
 
             result.add(new ComputedLine(
                     product, qty, unitPrice, lineDisc, taxable,
-                    product.getTaxRatePct(), halfGst, halfGst, lineTotal));
+                    gstRate, halfGst, halfGst, lineTotal));
         }
         return result;
     }
 
-    private Totals computeTotals(List<ComputedLine> lines, DiscountMode mode, BigDecimal billDiscount) {
+    private BigDecimal lineNetTotal(List<ComputedLine> lines) {
+        return lines.stream()
+                .map(l -> MoneyUtils.roundHalfUp2(
+                        l.unitPrice().multiply(l.quantity()).subtract(l.lineDiscount())))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private BigDecimal compositeGstOnBase(BigDecimal taxableBase, TaxConfig tax) {
+        if (taxableBase.compareTo(BigDecimal.ZERO) <= 0) {
+            return BigDecimal.ZERO;
+        }
+        if (tax.priceIncludesTax()) {
+            BigDecimal divisor = BigDecimal.ONE.add(
+                    tax.compositeRatePct().divide(new BigDecimal("100"), 6, java.math.RoundingMode.HALF_UP));
+            BigDecimal taxable = MoneyUtils.roundHalfUp2(
+                    taxableBase.divide(divisor, 2, java.math.RoundingMode.HALF_UP));
+            return MoneyUtils.roundHalfUp2(taxableBase.subtract(taxable));
+        }
+        return MoneyUtils.pct(taxableBase, tax.compositeRatePct());
+    }
+
+    private TaxConfig effectiveTaxConfig(GstScheme override) {
+        TaxConfig base = settingsService.getTaxConfig().normalized();
+        if (override == null || override == base.scheme()) {
+            return base;
+        }
+        return new TaxConfig(
+                override,
+                base.priceIncludesTax(),
+                base.enabledRates(),
+                base.compositeRatePct(),
+                base.defaultCategoryRatePct(),
+                base.categoryRates());
+    }
+
+    private BigDecimal resolveGstRate(Product product, TaxConfig tax) {
+        return switch (tax.scheme()) {
+            case COMPOSITE -> tax.compositeRatePct();
+            case CATEGORY -> {
+                Category category = product.getCategory();
+                if (category != null) {
+                    UUID categoryId = category.getId();
+                    yield tax.categoryRates().stream()
+                            .filter(r -> categoryId.equals(r.categoryId()))
+                            .map(CategoryGstRate::ratePct)
+                            .findFirst()
+                            .orElse(tax.defaultCategoryRatePct());
+                }
+                yield tax.defaultCategoryRatePct();
+            }
+            default -> product.getTaxRatePct();
+        };
+    }
+
+    private Totals computeTotals(List<ComputedLine> lines, DiscountMode mode, BigDecimal billDiscount, TaxConfig tax) {
         BigDecimal subtotal = lines.stream()
                 .map(l -> MoneyUtils.roundHalfUp2(l.unitPrice().multiply(l.quantity())))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal gstTotal = lines.stream()
-                .map(l -> MoneyUtils.pct(
-                        MoneyUtils.roundHalfUp2(l.unitPrice().multiply(l.quantity())),
-                        l.gstRate()))
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-
         BigDecimal discount = billDiscount != null ? billDiscount : BigDecimal.ZERO;
         if (mode == DiscountMode.PERCENT) {
             discount = MoneyUtils.pct(subtotal, discount);
@@ -431,7 +514,32 @@ public class BillingService {
             discount = MoneyUtils.roundHalfUp2(discount);
         }
 
-        BigDecimal grand = MoneyUtils.roundHalfUp2(subtotal.subtract(discount).add(gstTotal));
+        BigDecimal gstTotal;
+        BigDecimal grand;
+        if (tax.scheme() == GstScheme.COMPOSITE) {
+            BigDecimal taxableBase = MoneyUtils.roundHalfUp2(lineNetTotal(lines).subtract(discount));
+            if (taxableBase.compareTo(BigDecimal.ZERO) < 0) {
+                taxableBase = BigDecimal.ZERO;
+            }
+            gstTotal = compositeGstOnBase(taxableBase, tax);
+            if (tax.priceIncludesTax()) {
+                grand = taxableBase;
+            } else {
+                grand = MoneyUtils.roundHalfUp2(taxableBase.add(gstTotal));
+            }
+        } else {
+            gstTotal = lines.stream()
+                    .map(l -> {
+                        BigDecimal gross = MoneyUtils.roundHalfUp2(l.unitPrice().multiply(l.quantity()));
+                        if (tax.priceIncludesTax()) {
+                            return MoneyUtils.roundHalfUp2(gross.subtract(l.lineDiscount()).subtract(l.taxable()));
+                        }
+                        return MoneyUtils.pct(gross, l.gstRate());
+                    })
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            grand = MoneyUtils.roundHalfUp2(subtotal.subtract(discount).add(gstTotal));
+        }
+
         BigDecimal halfGst = MoneyUtils.roundHalfUp2(gstTotal.divide(new BigDecimal("2")));
 
         return new Totals(subtotal, discount, halfGst, halfGst, grand);
@@ -586,6 +694,7 @@ public class BillingService {
                 cashier.getName(),
                 status,
                 discountMode,
+                bill.getGstScheme() != null ? bill.getGstScheme() : GstScheme.PRODUCT.name(),
                 bill.getSubtotal(),
                 bill.getBillDiscount(),
                 bill.getCgstTotal(),
@@ -597,7 +706,38 @@ public class BillingService {
                 primary != null ? primary.getChangeDue() : null,
                 bill.getCreatedAt(),
                 bill.getUpdatedAt(),
+                computeGstSlabs(bill),
                 lines);
+    }
+
+    private List<GstSlabSummary> computeGstSlabs(Bill bill) {
+        if (GstScheme.COMPOSITE.name().equals(bill.getGstScheme())) {
+            BigDecimal tax = bill.getCgstTotal().add(bill.getSgstTotal()).add(bill.getIgstTotal());
+            BigDecimal taxable = bill.getItems().stream()
+                    .map(BillItem::getTaxableValue)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add)
+                    .subtract(bill.getBillDiscount());
+            if (taxable.compareTo(BigDecimal.ZERO) < 0) {
+                taxable = BigDecimal.ZERO;
+            }
+            BigDecimal rate = taxable.compareTo(BigDecimal.ZERO) > 0
+                    ? tax.multiply(new BigDecimal("100"))
+                            .divide(taxable, 2, java.math.RoundingMode.HALF_UP)
+                    : BigDecimal.ZERO;
+            return List.of(new GstSlabSummary(rate, taxable, tax));
+        }
+        Map<BigDecimal, BigDecimal[]> byRate = new TreeMap<>();
+        for (BillItem item : bill.getItems()) {
+            BigDecimal rate = item.getGstRate().stripTrailingZeros();
+            BigDecimal[] acc = byRate.computeIfAbsent(rate, k -> new BigDecimal[]{
+                    BigDecimal.ZERO, BigDecimal.ZERO});
+            acc[0] = acc[0].add(item.getTaxableValue());
+            BigDecimal itemTax = item.getCgstAmount().add(item.getSgstAmount()).add(item.getIgstAmount());
+            acc[1] = acc[1].add(itemTax);
+        }
+        return byRate.entrySet().stream()
+                .map(e -> new GstSlabSummary(e.getKey(), e.getValue()[0], e.getValue()[1]))
+                .toList();
     }
 
     private CustomerResponse toCustomerResponse(Customer c) {
