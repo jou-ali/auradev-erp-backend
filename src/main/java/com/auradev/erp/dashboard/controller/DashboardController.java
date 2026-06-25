@@ -30,14 +30,14 @@ public class DashboardController {
 
     @Operation(summary = "Store-wide dashboard shell", description = "Tenant, low stock, activity — load once, not tied to period filters")
     @GetMapping("/shell")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("@authz.can(authentication, 'DASHBOARD_VIEW')")
     public ResponseEntity<DashboardShellResponse> shell() {
         return ResponseEntity.ok(dashboardService.getShell());
     }
 
     @Operation(summary = "Filter-dependent dashboard metrics", description = "KPIs, trend, top products, recent bills — reload when filters change")
     @GetMapping("/metrics")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("@authz.can(authentication, 'DASHBOARD_VIEW')")
     public ResponseEntity<DashboardMetricsResponse> metrics(
             @RequestParam(required = false) String preset,
             @RequestParam(required = false) String range,
@@ -51,7 +51,7 @@ public class DashboardController {
 
     @Operation(summary = "Full dashboard (initial load)")
     @GetMapping
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("@authz.can(authentication, 'DASHBOARD_VIEW')")
     public ResponseEntity<DashboardResponse> get(
             @RequestParam(required = false) String preset,
             @RequestParam(required = false) String range,
@@ -65,7 +65,7 @@ public class DashboardController {
 
     @Operation(summary = "Live dashboard slice", description = "KPIs, recent bills, stock alerts — for 60s polling without reloading charts")
     @GetMapping("/live")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("@authz.can(authentication, 'DASHBOARD_VIEW')")
     public ResponseEntity<DashboardLiveResponse> live(
             @RequestParam(required = false) String preset,
             @RequestParam(required = false) String range,
@@ -79,7 +79,7 @@ public class DashboardController {
 
     @Operation(summary = "Sales trend chart only", description = "Reload chart when period or filters change")
     @GetMapping("/trend")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("@authz.can(authentication, 'DASHBOARD_VIEW')")
     public ResponseEntity<DashboardTrendResponse> trend(
             @RequestParam(required = false) String preset,
             @RequestParam(required = false) String range,

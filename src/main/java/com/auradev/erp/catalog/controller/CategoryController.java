@@ -25,7 +25,7 @@ public class CategoryController {
 
     @Operation(summary = "List all categories for the tenant")
     @GetMapping
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("@authz.can(authentication, 'INVENTORY_VIEW')")
     public ResponseEntity<List<CategoryResponse>> list() {
         return ResponseEntity.ok(catalogService.listCategories());
     }
@@ -33,14 +33,14 @@ public class CategoryController {
     @Operation(summary = "Create a new category")
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    @PreAuthorize("hasAnyRole('MANAGER','INVENTORY_STAFF','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.canAny(authentication, 'INVENTORY_EDIT', 'PRODUCT_MANAGE')")
     public ResponseEntity<CategoryResponse> create(@Valid @RequestBody CreateCategoryRequest req) {
         return ResponseEntity.status(HttpStatus.CREATED).body(catalogService.createCategory(req));
     }
 
     @Operation(summary = "Update a category")
     @PutMapping("/{id}")
-    @PreAuthorize("hasAnyRole('MANAGER','INVENTORY_STAFF','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.canAny(authentication, 'INVENTORY_EDIT', 'PRODUCT_MANAGE')")
     public ResponseEntity<CategoryResponse> update(
             @PathVariable UUID id,
             @Valid @RequestBody CreateCategoryRequest req) {
@@ -49,7 +49,7 @@ public class CategoryController {
 
     @Operation(summary = "Soft-delete a category (sets active=false)")
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAnyRole('MANAGER','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'PRODUCT_MANAGE')")
     public ResponseEntity<Void> delete(@PathVariable UUID id) {
         catalogService.deleteCategory(id);
         return ResponseEntity.noContent().build();

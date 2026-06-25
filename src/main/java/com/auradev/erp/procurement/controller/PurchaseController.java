@@ -27,7 +27,7 @@ public class PurchaseController {
     private final PurchaseService purchaseService;
 
     @GetMapping
-    @PreAuthorize("hasAnyRole('MANAGER','INVENTORY_STAFF','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'PURCHASE_VIEW')")
     public ResponseEntity<PageResponse<PurchaseSummaryResponse>> list(
             @RequestParam(required = false) String q,
             @RequestParam(required = false) String status,
@@ -37,33 +37,33 @@ public class PurchaseController {
     }
 
     @GetMapping("/{id}")
-    @PreAuthorize("hasAnyRole('MANAGER','INVENTORY_STAFF','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'PURCHASE_VIEW')")
     public ResponseEntity<PurchaseResponse> get(@PathVariable UUID id) {
         return ResponseEntity.ok(purchaseService.get(id));
     }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    @PreAuthorize("hasAnyRole('MANAGER','INVENTORY_STAFF','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'PURCHASE_MANAGE')")
     public ResponseEntity<PurchaseResponse> create(@Valid @RequestBody CreatePurchaseRequest req) {
         return ResponseEntity.status(HttpStatus.CREATED).body(purchaseService.create(req));
     }
 
     @PostMapping("/{id}/confirm")
-    @PreAuthorize("hasAnyRole('MANAGER','INVENTORY_STAFF','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'PURCHASE_MANAGE')")
     public ResponseEntity<PurchaseResponse> confirm(@PathVariable UUID id) {
         return ResponseEntity.ok(purchaseService.confirm(id));
     }
 
     @PostMapping("/{id}/receive")
     @Operation(summary = "Receive GRN", description = "Stock in all lines and mark purchase as billed")
-    @PreAuthorize("hasAnyRole('MANAGER','INVENTORY_STAFF','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'PURCHASE_MANAGE')")
     public ResponseEntity<PurchaseResponse> receive(@PathVariable UUID id) {
         return ResponseEntity.ok(purchaseService.receive(id));
     }
 
     @PostMapping("/{id}/pay")
-    @PreAuthorize("hasAnyRole('MANAGER','TENANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("@authz.can(authentication, 'PURCHASE_MANAGE')")
     public ResponseEntity<PurchaseResponse> markPaid(@PathVariable UUID id) {
         return ResponseEntity.ok(purchaseService.markPaid(id));
     }

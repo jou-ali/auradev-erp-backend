@@ -21,7 +21,7 @@ public class CustomerController {
     private final BillingService billingService;
 
     @GetMapping
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("@authz.can(authentication, 'CUSTOMER_VIEW')")
     public ResponseEntity<List<CustomerResponse>> list() {
         return ResponseEntity.ok(billingService.listCustomers());
     }
