@@ -53,6 +53,7 @@ public class SettingsService {
     private final TenantSettingsRepository tenantSettingsRepository;
     private final CategoryRepository categoryRepository;
     private final AuditService auditService;
+    private final TenantSettingsCache settingsCache;
 
     @Value("${app.uploads.dir:uploads}")
     private String uploadsDir;
@@ -147,8 +148,20 @@ public class SettingsService {
 
     @Transactional(readOnly = true)
     public BillingConfig getBillingConfig() {
-        BillingConfig billing = loadOrCreateSettings().getBilling();
-        return billing != null ? billing.normalized() : BillingConfig.defaults();
+        UUID tenantId = TenantContext.require();
+        var cached = settingsCache.get(tenantId);
+        if (cached.isPresent()) {
+            return cached.get().billing();
+        }
+        TenantSettings settings = loadOrCreateSettings();
+        BillingConfig billing = settings.getBilling() != null
+                ? settings.getBilling().normalized()
+                : BillingConfig.defaults();
+        TaxConfig tax = settings.getTax() != null
+                ? settings.getTax().normalized()
+                : TaxConfig.defaults();
+        settingsCache.put(tenantId, billing, tax);
+        return billing;
     }
 
     public BillingSettingsResponse updateBillingSettings(UpdateBillingSettingsRequest req) {
@@ -172,6 +185,7 @@ public class SettingsService {
         settings.setBilling(updated);
         settings.setUpdatedBy(currentUserId());
         tenantSettingsRepository.save(settings);
+        settingsCache.evict(settings.getTenantId());
 
         auditService.log("BILLING_SETTINGS_UPDATED", "tenant_settings", settings.getTenantId(), Map.of(
                 "maxBillDiscountPercent", updated.maxBillDiscountPercent(),
@@ -187,8 +201,20 @@ public class SettingsService {
 
     @Transactional(readOnly = true)
     public TaxConfig getTaxConfig() {
-        TaxConfig tax = loadOrCreateSettings().getTax();
-        return tax != null ? tax.normalized() : TaxConfig.defaults();
+        UUID tenantId = TenantContext.require();
+        var cached = settingsCache.get(tenantId);
+        if (cached.isPresent()) {
+            return cached.get().tax();
+        }
+        TenantSettings settings = loadOrCreateSettings();
+        BillingConfig billing = settings.getBilling() != null
+                ? settings.getBilling().normalized()
+                : BillingConfig.defaults();
+        TaxConfig tax = settings.getTax() != null
+                ? settings.getTax().normalized()
+                : TaxConfig.defaults();
+        settingsCache.put(tenantId, billing, tax);
+        return tax;
     }
 
     public TaxSettingsResponse updateTaxSettings(UpdateTaxSettingsRequest req) {
@@ -222,6 +248,7 @@ public class SettingsService {
         settings.setTax(updated);
         settings.setUpdatedBy(currentUserId());
         tenantSettingsRepository.save(settings);
+        settingsCache.evict(settings.getTenantId());
 
         auditService.log("TAX_SETTINGS_UPDATED", "tenant_settings", settings.getTenantId(), Map.of(
                 "scheme", updated.scheme().name(),

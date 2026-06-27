@@ -6,6 +6,7 @@ import com.auradev.erp.catalog.repository.ProductRepository;
 import com.auradev.erp.common.error.BusinessException;
 import com.auradev.erp.common.error.EntityNotFoundException;
 import com.auradev.erp.common.pagination.PageResponse;
+import com.auradev.erp.inventory.dto.SaleMovementLine;
 import com.auradev.erp.inventory.dto.StockAdjustRequest;
 import com.auradev.erp.inventory.dto.StockMovementResponse;
 import com.auradev.erp.inventory.entity.Inventory;
@@ -25,8 +26,12 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -89,6 +94,75 @@ public class InventoryService {
         log.info("Movement recorded product={} type={} qty={} balance={}",
                 productId, movementType, quantity, refreshed.getQuantityOnHand());
         return saved;
+    }
+
+    /**
+     * Records all sale stock movements for a bill in one locked batch — avoids per-line round trips.
+     */
+    public void recordSaleMovements(
+            List<SaleMovementLine> lines,
+            RefType refType,
+            UUID refId,
+            String notes) {
+        if (lines == null || lines.isEmpty()) {
+            return;
+        }
+
+        UUID tenantId = TenantContext.require();
+        UUID userId = requireCurrentUserId();
+        Instant now = Instant.now();
+
+        Map<UUID, BigDecimal> qtyByProduct = new LinkedHashMap<>();
+        for (SaleMovementLine line : lines) {
+            if (line.quantity() == null || line.quantity().compareTo(BigDecimal.ZERO) <= 0) {
+                throw new BusinessException("INVALID_QUANTITY", "Quantity must be positive");
+            }
+            qtyByProduct.merge(line.productId(), line.quantity(), BigDecimal::add);
+        }
+
+        List<UUID> productIds = new ArrayList<>(qtyByProduct.keySet());
+        Map<UUID, Inventory> locked = inventoryRepository.findForUpdateByProductIds(tenantId, productIds).stream()
+                .collect(Collectors.toMap(inv -> inv.getProduct().getId(), inv -> inv));
+
+        List<StockMovement> movements = new ArrayList<>(productIds.size());
+        for (UUID productId : productIds) {
+            BigDecimal qty = qtyByProduct.get(productId);
+            Inventory inv = locked.get(productId);
+            if (inv == null) {
+                throw new BusinessException(
+                        "INSUFFICIENT_STOCK",
+                        "Insufficient stock for product " + productId);
+            }
+
+            BigDecimal onHand = inv.getQuantityOnHand();
+            if (onHand.compareTo(qty) < 0) {
+                throw new BusinessException(
+                        "INSUFFICIENT_STOCK",
+                        "Insufficient stock for product " + productId);
+            }
+
+            int updated = inventoryRepository.decrement(tenantId, productId, qty);
+            if (updated == 0) {
+                throw new BusinessException(
+                        "INSUFFICIENT_STOCK",
+                        "Insufficient stock for product " + productId);
+            }
+
+            StockMovement movement = new StockMovement();
+            movement.setTenantId(tenantId);
+            movement.setProduct(inv.getProduct());
+            movement.setMovementType(MovementType.sale);
+            movement.setQuantity(qty);
+            movement.setQuantityAfter(onHand.subtract(qty));
+            movement.setReferenceType(refType != null ? refType : RefType.manual);
+            movement.setReferenceId(refId);
+            movement.setNotes(notes);
+            movement.setCreatedBy(userId);
+            movement.setCreatedAt(now);
+            movements.add(movement);
+        }
+
+        movementRepository.saveAll(movements);
     }
 
     public void ensureInventoryRow(UUID tenantId, UUID productId, BigDecimal initialStock,

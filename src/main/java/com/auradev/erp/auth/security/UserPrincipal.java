@@ -30,6 +30,8 @@ public class UserPrincipal implements UserDetails {
     /** Nullable — {@code null} for SUPER_ADMIN. */
     private final UUID tenantId;
 
+    private final String name;
+
     private final String email;
 
     private final String passwordHash;
@@ -52,6 +54,7 @@ public class UserPrincipal implements UserDetails {
         return UserPrincipal.builder()
                 .id(user.getId())
                 .tenantId(user.getTenantId())
+                .name(user.getName())
                 .email(user.getEmail())
                 .passwordHash(user.getPasswordHash())
                 .role(user.getRole())

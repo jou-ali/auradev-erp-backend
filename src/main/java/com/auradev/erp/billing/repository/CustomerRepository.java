@@ -15,4 +15,6 @@ public interface CustomerRepository extends JpaRepository<Customer, UUID> {
     List<Customer> findByTenantIdOrderByNameAsc(UUID tenantId);
 
     Optional<Customer> findByTenantIdAndType(UUID tenantId, CustomerType type);
+
+    boolean existsByTenantIdAndPhoneAndTypeNot(UUID tenantId, String phone, CustomerType type);
 }

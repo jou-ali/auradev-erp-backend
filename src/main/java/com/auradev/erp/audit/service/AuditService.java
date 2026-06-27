@@ -3,6 +3,7 @@ package com.auradev.erp.audit.service;
 import com.auradev.erp.audit.dto.AuditLogResponse;
 import com.auradev.erp.audit.entity.AuditLog;
 import com.auradev.erp.audit.repository.AuditLogRepository;
+import com.auradev.erp.audit.AuditLogEvent;
 import com.auradev.erp.auth.security.UserPrincipal;
 import com.auradev.erp.common.web.RequestIpHelper;
 import com.auradev.erp.tenant.TenantContext;
@@ -10,6 +11,7 @@ import com.auradev.erp.user.entity.User;
 import com.auradev.erp.user.repository.UserRepository;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -32,15 +34,17 @@ public class AuditService {
 
     private final AuditLogRepository auditLogRepository;
     private final UserRepository userRepository;
+    private final ApplicationEventPublisher events;
 
     public void log(String action, String entityType, UUID entityId, Map<String, Object> metadata) {
         UUID tenantId = TenantContext.get();
         UUID userId = currentUserId().orElse(null);
-        persist(tenantId, userId, action, entityType, entityId, metadata, currentIp());
+        events.publishEvent(new AuditLogEvent(tenantId, userId, action, entityType, entityId, metadata, currentIp()));
     }
 
     public void logForUser(User user, String action, String entityType, UUID entityId, Map<String, Object> metadata, String ip) {
-        persist(user.getTenantId(), user.getId(), action, entityType, entityId, metadata, ip);
+        events.publishEvent(new AuditLogEvent(
+                user.getTenantId(), user.getId(), action, entityType, entityId, metadata, ip));
     }
 
     @Transactional(readOnly = true)
@@ -61,25 +65,6 @@ public class AuditService {
         return page.getContent().stream()
                 .map(entry -> toResponse(entry, names))
                 .toList();
-    }
-
-    private void persist(
-            UUID tenantId,
-            UUID userId,
-            String action,
-            String entityType,
-            UUID entityId,
-            Map<String, Object> metadata,
-            String ip) {
-        AuditLog row = new AuditLog();
-        row.setTenantId(tenantId);
-        row.setUserId(userId);
-        row.setAction(action);
-        row.setEntityType(entityType);
-        row.setEntityId(entityId);
-        row.setMetadata(metadata);
-        row.setIpAddress(ip);
-        auditLogRepository.save(row);
     }
 
     private AuditLogResponse toResponse(AuditLog entry, Map<UUID, String> names) {

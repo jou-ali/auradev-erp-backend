@@ -27,6 +27,9 @@ public interface BillRepository extends JpaRepository<Bill, UUID> {
     @EntityGraph(attributePaths = {"items", "items.product"})
     Optional<Bill> findByIdAndTenantIdAndStatus(UUID id, UUID tenantId, BillStatus status);
 
+    @EntityGraph(attributePaths = {"items", "items.product"})
+    Optional<Bill> findByTenantIdAndCustomerIdAndStatus(UUID tenantId, UUID customerId, BillStatus status);
+
     @Query("""
             SELECT new com.auradev.erp.billing.dto.BillSummaryResponse(
                 b.id,

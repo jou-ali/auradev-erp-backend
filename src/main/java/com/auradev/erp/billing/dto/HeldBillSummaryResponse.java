@@ -7,6 +7,7 @@ import java.util.UUID;
 public record HeldBillSummaryResponse(
         UUID id,
         String billNo,
+        UUID customerId,
         String customerName,
         int itemCount,
         BigDecimal grandTotal,

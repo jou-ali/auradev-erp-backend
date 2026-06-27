@@ -12,6 +12,8 @@ import java.util.UUID;
 
 public record HoldBillRequest(
         UUID customerId,
+        /** When set, updates this parked bill instead of creating a new one. */
+        UUID heldBillId,
         @NotNull DiscountMode discountMode,
         BigDecimal billDiscount,
         @NotEmpty @Valid List<BillLineRequest> items,

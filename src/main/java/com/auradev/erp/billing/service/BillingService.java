@@ -13,8 +13,8 @@ import com.auradev.erp.catalog.repository.ProductRepository;
 import com.auradev.erp.common.error.BusinessException;
 import com.auradev.erp.common.error.EntityNotFoundException;
 import com.auradev.erp.common.util.MoneyUtils;
+import com.auradev.erp.inventory.dto.SaleMovementLine;
 import com.auradev.erp.inventory.entity.Inventory;
-import com.auradev.erp.inventory.entity.MovementType;
 import com.auradev.erp.inventory.entity.RefType;
 import com.auradev.erp.inventory.repository.InventoryRepository;
 import com.auradev.erp.inventory.service.InventoryService;
@@ -46,6 +46,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 @Transactional
@@ -73,6 +74,34 @@ public class BillingService {
                 .toList();
     }
 
+    public CustomerResponse createCustomer(CreateCustomerRequest req) {
+        UUID tenantId = TenantContext.require();
+        UserPrincipal principal = requirePrincipal();
+
+        if (req.type() == CustomerType.walkin) {
+            throw new BusinessException("WALKIN_RESERVED", "Walk-in is a system customer — choose B2C or B2B");
+        }
+
+        String phone = blankToNull(req.phone());
+        if (phone != null && customerRepository.existsByTenantIdAndPhoneAndTypeNot(tenantId, phone, CustomerType.walkin)) {
+            throw new BusinessException("PHONE_EXISTS", "A customer with this phone number already exists");
+        }
+
+        CustomerType type = req.type() != null ? req.type() : CustomerType.b2c;
+        Customer customer = new Customer();
+        customer.setTenantId(tenantId);
+        customer.setName(req.name().trim());
+        customer.setPhone(phone);
+        customer.setType(type);
+        customer.setGstin(blankToNull(req.gstin()));
+        customer.setCreatedBy(principal.getId());
+        customer.setUpdatedBy(principal.getId());
+
+        Customer saved = customerRepository.save(customer);
+        auditService.log("CUSTOMER_CREATED", "customer", saved.getId(), Map.of("name", saved.getName()));
+        return toCustomerResponse(saved);
+    }
+
     public BillResponse createBill(CreateBillRequest req) {
         UUID tenantId = TenantContext.require();
         UserPrincipal principal = requirePrincipal();
@@ -82,8 +111,6 @@ public class BillingService {
                 .orElseThrow(() -> new EntityNotFoundException("Tenant", tenantId));
 
         Customer customer = resolveCustomer(tenantId, req.customerId());
-        User cashier = userRepository.findById(cashierId)
-                .orElseThrow(() -> new EntityNotFoundException("User", cashierId));
 
         TaxConfig tax = effectiveTaxConfig(req.gstSchemeOverride());
         List<ComputedLine> lines = computeLines(req.items(), tax);
@@ -101,15 +128,7 @@ public class BillingService {
 
         Bill saved = billRepository.save(bill);
 
-        for (ComputedLine cl : lines) {
-            inventoryService.recordMovement(
-                    cl.product().getId(),
-                    MovementType.sale,
-                    cl.quantity(),
-                    RefType.bill,
-                    saved.getId(),
-                    "Sale " + billNo);
-        }
+        recordSaleMovements(lines, saved.getId(), billNo);
 
         if (req.payment().method() == PaymentMethod.CREDIT) {
             customer.setCreditBalance(customer.getCreditBalance().add(totals.grandTotal()));
@@ -121,7 +140,7 @@ public class BillingService {
                 "grandTotal", totals.grandTotal(),
                 "customer", customer.getName()));
 
-        return toBillResponse(saved, customer, cashier, BillStatus.COMPLETED, req.discountMode(), req.payment());
+        return toBillResponse(saved, customer, cashierDisplayName(principal), BillStatus.COMPLETED, req.discountMode(), req.payment());
     }
 
     public BillResponse holdBill(HoldBillRequest req) {
@@ -137,12 +156,19 @@ public class BillingService {
                 .orElseThrow(() -> new EntityNotFoundException("Tenant", tenantId));
 
         Customer customer = resolveCustomer(tenantId, req.customerId());
-        User cashier = userRepository.findById(cashierId)
-                .orElseThrow(() -> new EntityNotFoundException("User", cashierId));
 
         TaxConfig tax = effectiveTaxConfig(req.gstSchemeOverride());
         List<ComputedLine> lines = computeLines(req.items(), tax);
         Totals totals = computeTotals(lines, req.discountMode(), req.billDiscount(), tax);
+
+        Bill existing = resolveHeldBillForHold(tenantId, customer.getId(), req.heldBillId());
+        if (existing != null) {
+            assertStockForSale(tenantId, lines, existing.getId());
+            applyHeldBillContents(existing, customer, cashierId, lines, totals, req.discountMode(), tax.scheme());
+            Bill saved = billRepository.save(existing);
+            return toBillResponse(saved, customer, cashierDisplayName(principal), BillStatus.HELD, req.discountMode(), null);
+        }
+
         assertStockForSale(tenantId, lines, null);
 
         Bill bill = buildBillEntity(
@@ -151,7 +177,7 @@ public class BillingService {
                 tax.scheme());
 
         Bill saved = billRepository.save(bill);
-        return toBillResponse(saved, customer, cashier, BillStatus.HELD, req.discountMode(), null);
+        return toBillResponse(saved, customer, cashierDisplayName(principal), BillStatus.HELD, req.discountMode(), null);
     }
 
     @Transactional(readOnly = true)
@@ -164,6 +190,7 @@ public class BillingService {
                     return new HeldBillSummaryResponse(
                             b.getId(),
                             b.getBillNo(),
+                            customer.getId(),
                             customer.getName(),
                             b.getItems().size(),
                             b.getGrandTotal(),
@@ -190,7 +217,7 @@ public class BillingService {
                 .orElseThrow(() -> new EntityNotFoundException("Customer", bill.getCustomerId()));
         User cashier = userRepository.findById(bill.getCashierId())
                 .orElseThrow(() -> new EntityNotFoundException("User", bill.getCashierId()));
-        return toBillResponse(bill, customer, cashier, BillStatus.COMPLETED, bill.getDiscountMode(), null);
+        return toBillResponse(bill, customer, cashier.getName(), BillStatus.COMPLETED, bill.getDiscountMode(), null);
     }
 
     @Transactional(readOnly = true)
@@ -202,7 +229,7 @@ public class BillingService {
                 .orElseThrow(() -> new EntityNotFoundException("Customer", bill.getCustomerId()));
         User cashier = userRepository.findById(bill.getCashierId())
                 .orElseThrow(() -> new EntityNotFoundException("User", bill.getCashierId()));
-        return toBillResponse(bill, customer, cashier, BillStatus.HELD, bill.getDiscountMode(), null);
+        return toBillResponse(bill, customer, cashier.getName(), BillStatus.HELD, bill.getDiscountMode(), null);
     }
 
     public BillResponse completeHeldBill(UUID id, CompleteHeldBillRequest req) {
@@ -216,8 +243,6 @@ public class BillingService {
         Tenant tenant = tenantRepository.findById(tenantId)
                 .orElseThrow(() -> new EntityNotFoundException("Tenant", tenantId));
         Customer customer = resolveCustomer(tenantId, req.customerId() != null ? req.customerId() : bill.getCustomerId());
-        User cashier = userRepository.findById(cashierId)
-                .orElseThrow(() -> new EntityNotFoundException("User", cashierId));
 
         TaxConfig tax = effectiveTaxConfig(req.gstSchemeOverride());
         List<ComputedLine> lines = computeLines(req.items(), tax);
@@ -249,22 +274,14 @@ public class BillingService {
 
         Bill saved = billRepository.save(bill);
 
-        for (ComputedLine cl : lines) {
-            inventoryService.recordMovement(
-                    cl.product().getId(),
-                    MovementType.sale,
-                    cl.quantity(),
-                    RefType.bill,
-                    saved.getId(),
-                    "Sale " + billNo);
-        }
+        recordSaleMovements(lines, saved.getId(), billNo);
 
         if (req.payment().method() == PaymentMethod.CREDIT) {
             customer.setCreditBalance(customer.getCreditBalance().add(totals.grandTotal()));
             customerRepository.save(customer);
         }
 
-        return toBillResponse(saved, customer, cashier, BillStatus.COMPLETED, req.discountMode(), req.payment());
+        return toBillResponse(saved, customer, cashierDisplayName(principal), BillStatus.COMPLETED, req.discountMode(), req.payment());
     }
 
     public void discardHeldBill(UUID id) {
@@ -387,6 +404,48 @@ public class BillingService {
         }
     }
 
+    private Bill resolveHeldBillForHold(UUID tenantId, UUID customerId, UUID heldBillId) {
+        if (heldBillId != null) {
+            Bill bill = billRepository.findByIdAndTenantIdAndStatus(heldBillId, tenantId, BillStatus.HELD)
+                    .orElseThrow(() -> new EntityNotFoundException("HeldBill", heldBillId));
+            if (!bill.getCustomerId().equals(customerId)) {
+                billRepository.findByTenantIdAndCustomerIdAndStatus(tenantId, customerId, BillStatus.HELD)
+                        .filter(other -> !other.getId().equals(bill.getId()))
+                        .ifPresent(other -> {
+                            throw new BusinessException(
+                                    "CUSTOMER_HAS_PARKED_BILL",
+                                    "This customer already has a parked bill — resume it first");
+                        });
+            }
+            return bill;
+        }
+        return billRepository.findByTenantIdAndCustomerIdAndStatus(tenantId, customerId, BillStatus.HELD)
+                .orElse(null);
+    }
+
+    private void applyHeldBillContents(
+            Bill bill,
+            Customer customer,
+            UUID cashierId,
+            List<ComputedLine> lines,
+            Totals totals,
+            DiscountMode discountMode,
+            GstScheme gstScheme) {
+        bill.getItems().clear();
+        bill.setCustomerId(customer.getId());
+        bill.setSubtotal(totals.subtotal());
+        bill.setBillDiscount(totals.discount());
+        bill.setDiscountMode(discountMode);
+        bill.setCgstTotal(totals.cgst());
+        bill.setSgstTotal(totals.sgst());
+        bill.setGrandTotal(totals.grandTotal());
+        bill.setGstScheme(gstScheme.name());
+        bill.setUpdatedBy(cashierId);
+        for (ComputedLine cl : lines) {
+            bill.getItems().add(toBillItem(bill, cl));
+        }
+    }
+
     private Customer resolveCustomer(UUID tenantId, UUID customerId) {
         if (customerId != null) {
             Customer customer = customerRepository.findById(customerId)
@@ -403,10 +462,20 @@ public class BillingService {
     }
 
     private List<ComputedLine> computeLines(List<BillLineRequest> items, TaxConfig tax) {
+        if (items.isEmpty()) {
+            return List.of();
+        }
+
+        List<UUID> productIds = items.stream().map(BillLineRequest::productId).distinct().toList();
+        Map<UUID, Product> productsById = productRepository.findWithCategoryByIdIn(productIds).stream()
+                .collect(Collectors.toMap(Product::getId, p -> p));
+
         List<ComputedLine> result = new ArrayList<>();
         for (BillLineRequest line : items) {
-            Product product = productRepository.findWithCategoryById(line.productId())
-                    .orElseThrow(() -> new EntityNotFoundException("Product", line.productId()));
+            Product product = productsById.get(line.productId());
+            if (product == null) {
+                throw new EntityNotFoundException("Product", line.productId());
+            }
             if (!product.isActive()) {
                 throw new BusinessException("PRODUCT_INACTIVE", "Product is inactive: " + product.getName());
             }
@@ -591,12 +660,16 @@ public class BillingService {
 
         Map<UUID, BigDecimal> heldByProduct = billRepository.sumHeldQuantitiesByProduct(tenantId, excludeHeldBillId);
 
+        Map<UUID, Inventory> inventoryByProduct = inventoryRepository
+                .findByTenantIdAndProductIdIn(tenantId, needed.keySet()).stream()
+                .collect(Collectors.toMap(inv -> inv.getProduct().getId(), inv -> inv));
+
         for (Map.Entry<UUID, BigDecimal> entry : needed.entrySet()) {
             UUID productId = entry.getKey();
             BigDecimal qtyNeeded = entry.getValue();
             Product product = products.get(productId);
 
-            Inventory inv = inventoryRepository.findByTenantIdAndProductId(tenantId, productId).orElse(null);
+            Inventory inv = inventoryByProduct.get(productId);
             BigDecimal onHand = inv != null ? inv.getQuantityOnHand() : BigDecimal.ZERO;
             BigDecimal held = heldByProduct.getOrDefault(productId, BigDecimal.ZERO);
             BigDecimal available = onHand.subtract(held);
@@ -614,6 +687,13 @@ public class BillingService {
                                 + heldNote);
             }
         }
+    }
+
+    private void recordSaleMovements(List<ComputedLine> lines, UUID billId, String billNo) {
+        List<SaleMovementLine> saleLines = lines.stream()
+                .map(cl -> new SaleMovementLine(cl.product().getId(), cl.quantity()))
+                .toList();
+        inventoryService.recordSaleMovements(saleLines, RefType.bill, billId, "Sale " + billNo);
     }
 
     private void addPayments(Bill bill, PaymentInput input, BigDecimal grandTotal) {
@@ -658,7 +738,7 @@ public class BillingService {
     private BillResponse toBillResponse(
             Bill bill,
             Customer customer,
-            User cashier,
+            String cashierName,
             BillStatus status,
             DiscountMode discountMode,
             PaymentInput payment) {
@@ -691,7 +771,7 @@ public class BillingService {
                 bill.getBillNo(),
                 customer.getId(),
                 customer.getName(),
-                cashier.getName(),
+                cashierName,
                 status,
                 discountMode,
                 bill.getGstScheme() != null ? bill.getGstScheme() : GstScheme.PRODUCT.name(),
@@ -752,6 +832,14 @@ public class BillingService {
             return up;
         }
         throw new BusinessException("UNAUTHENTICATED", "User context required");
+    }
+
+    private static String cashierDisplayName(UserPrincipal principal) {
+        String name = principal.getName();
+        if (name != null && !name.isBlank()) {
+            return name;
+        }
+        return principal.getEmail();
     }
 
     private static String blankToNull(String q) {
