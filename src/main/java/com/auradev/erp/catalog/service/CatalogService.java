@@ -177,20 +177,35 @@ public class CatalogService {
         PageResponse<ProductResponse> page = listProducts(tenantId, q, category, unit, status, Pageable.unpaged());
         boolean stripCost = isCashier();
         String[] headers = stripCost
-                ? new String[]{"ID", "Name", "SKU", "Barcode", "Category", "Unit", "MRP", "Selling", "Tax%", "Stock", "Reorder", "Status"}
-                : new String[]{"ID", "Name", "SKU", "Barcode", "Category", "Unit", "MRP", "Selling", "Cost", "Tax%", "Stock", "Reorder", "Status"};
+                ? new String[]{
+                        "ID", "Name", "SKU", "Barcode", "Category", "Unit",
+                        "MRP", "Selling", "Tax%", "Stock", "Reorder", "Status",
+                        "Selling Value", "MRP Value"
+                }
+                : new String[]{
+                        "ID", "Name", "SKU", "Barcode", "Category", "Unit",
+                        "MRP", "Selling", "Cost", "Tax%", "Stock", "Reorder", "Status",
+                        "Cost Value", "Selling Value", "MRP Value"
+                };
 
         StringWriter sw = new StringWriter();
         try (CSVPrinter printer = new CSVPrinter(sw, CSVFormat.DEFAULT.builder().setHeader(headers).build())) {
             for (ProductResponse p : page.content()) {
+                BigDecimal qty = p.quantityOnHand() != null ? p.quantityOnHand() : BigDecimal.ZERO;
+                BigDecimal sellingValue = qty.multiply(p.priceSelling() != null ? p.priceSelling() : BigDecimal.ZERO);
+                BigDecimal mrpValue = qty.multiply(p.priceMrp() != null ? p.priceMrp() : BigDecimal.ZERO);
                 if (stripCost) {
                     printer.printRecord(p.id(), p.name(), p.sku(), p.barcode(), p.categoryName(),
                             p.unitLabel(), p.priceMrp(), p.priceSelling(), p.taxRatePct(),
-                            p.quantityOnHand(), p.reorderQuantity(), p.stockStatus());
+                            p.quantityOnHand(), p.reorderQuantity(), p.stockStatus(),
+                            sellingValue, mrpValue);
                 } else {
+                    BigDecimal cost = p.costPrice() != null ? p.costPrice() : BigDecimal.ZERO;
+                    BigDecimal costValue = qty.multiply(cost);
                     printer.printRecord(p.id(), p.name(), p.sku(), p.barcode(), p.categoryName(),
                             p.unitLabel(), p.priceMrp(), p.priceSelling(), p.costPrice(), p.taxRatePct(),
-                            p.quantityOnHand(), p.reorderQuantity(), p.stockStatus());
+                            p.quantityOnHand(), p.reorderQuantity(), p.stockStatus(),
+                            costValue, sellingValue, mrpValue);
                 }
             }
         } catch (IOException e) {

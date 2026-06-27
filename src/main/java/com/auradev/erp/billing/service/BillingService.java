@@ -31,12 +31,17 @@ import com.auradev.erp.user.entity.UserRole;
 import com.auradev.erp.user.repository.UserRepository;
 import com.auradev.erp.common.pagination.PageResponse;
 import lombok.RequiredArgsConstructor;
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVPrinter;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.IOException;
+import java.io.StringWriter;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -205,6 +210,107 @@ public class BillingService {
         var page = billRepository.searchCompletedSummaries(
                 tenantId, BillStatus.COMPLETED, blankToNull(q), pageable);
         return PageResponse.of(page);
+    }
+
+    @Transactional(readOnly = true)
+    public byte[] exportCsv(String q, String mode) {
+        UUID tenantId = TenantContext.require();
+        List<Bill> bills = billRepository.findCompletedForExport(
+                tenantId, BillStatus.COMPLETED, blankToNull(q));
+        if (bills.isEmpty()) {
+            throw new BusinessException("NO_DATA", "No completed bills to export");
+        }
+
+        Map<UUID, String> customerNames = loadCustomerNames(bills);
+        Map<UUID, String> cashierNames = loadCashierNames(bills);
+        boolean detailed = "detailed".equalsIgnoreCase(mode) || "lines".equalsIgnoreCase(mode);
+
+        StringWriter sw = new StringWriter();
+        try {
+            if (detailed) {
+                String[] headers = {
+                        "Bill No", "Date", "Customer", "Cashier", "Payment", "Payment Status",
+                        "Subtotal", "Bill Discount", "CGST", "SGST", "Grand Total",
+                        "Product", "SKU", "Qty", "Unit Price", "Line Discount", "GST%", "Line Total"
+                };
+                try (CSVPrinter printer = new CSVPrinter(sw,
+                        CSVFormat.DEFAULT.builder().setHeader(headers).build())) {
+                    for (Bill bill : bills) {
+                        bill.getPayments().size();
+                        String customer = customerNames.getOrDefault(bill.getCustomerId(), "");
+                        String cashier = cashierNames.getOrDefault(bill.getCashierId(), "");
+                        String paymentMethod = primaryPaymentMethod(bill);
+                        for (BillItem item : bill.getItems()) {
+                            printer.printRecord(
+                                    bill.getBillNo(),
+                                    bill.getCreatedAt(),
+                                    customer,
+                                    cashier,
+                                    paymentMethod,
+                                    bill.getPaymentStatus(),
+                                    bill.getSubtotal(),
+                                    bill.getBillDiscount(),
+                                    bill.getCgstTotal(),
+                                    bill.getSgstTotal(),
+                                    bill.getGrandTotal(),
+                                    item.getProductNameSnapshot(),
+                                    item.getSkuSnapshot(),
+                                    item.getQuantity(),
+                                    item.getUnitPrice(),
+                                    item.getLineDiscount(),
+                                    item.getGstRate(),
+                                    item.getLineTotal());
+                        }
+                    }
+                }
+            } else {
+                String[] headers = {
+                        "Bill No", "Date", "Customer", "Cashier", "Items", "Subtotal",
+                        "Bill Discount", "CGST", "SGST", "Grand Total", "Payment", "Payment Status", "GST Scheme"
+                };
+                try (CSVPrinter printer = new CSVPrinter(sw,
+                        CSVFormat.DEFAULT.builder().setHeader(headers).build())) {
+                    for (Bill bill : bills) {
+                        bill.getPayments().size();
+                        printer.printRecord(
+                                bill.getBillNo(),
+                                bill.getCreatedAt(),
+                                customerNames.getOrDefault(bill.getCustomerId(), ""),
+                                cashierNames.getOrDefault(bill.getCashierId(), ""),
+                                bill.getItems().size(),
+                                bill.getSubtotal(),
+                                bill.getBillDiscount(),
+                                bill.getCgstTotal(),
+                                bill.getSgstTotal(),
+                                bill.getGrandTotal(),
+                                primaryPaymentMethod(bill),
+                                bill.getPaymentStatus(),
+                                bill.getGstScheme());
+                    }
+                }
+            }
+        } catch (IOException e) {
+            throw new BusinessException("CSV_EXPORT_FAILED", e.getMessage());
+        }
+        return sw.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    private Map<UUID, String> loadCustomerNames(List<Bill> bills) {
+        List<UUID> ids = bills.stream().map(Bill::getCustomerId).distinct().toList();
+        return customerRepository.findAllById(ids).stream()
+                .collect(Collectors.toMap(Customer::getId, Customer::getName));
+    }
+
+    private Map<UUID, String> loadCashierNames(List<Bill> bills) {
+        List<UUID> ids = bills.stream().map(Bill::getCashierId).distinct().toList();
+        return userRepository.findAllById(ids).stream()
+                .collect(Collectors.toMap(User::getId, User::getName));
+    }
+
+    private static String primaryPaymentMethod(Bill bill) {
+        if (bill.getPayments() == null || bill.getPayments().isEmpty()) return "";
+        if (bill.getPayments().size() > 1) return "SPLIT";
+        return bill.getPayments().get(0).getMethod().name();
     }
 
     @Transactional(readOnly = true)

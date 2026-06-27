@@ -84,4 +84,17 @@ public interface BillRepository extends JpaRepository<Bill, UUID> {
             @Param("tenantId") UUID tenantId,
             @Param("q") String q,
             Pageable pageable);
+
+    @EntityGraph(attributePaths = {"items", "items.product"})
+    @Query("""
+            SELECT b FROM Bill b
+            WHERE b.tenantId = :tenantId
+              AND b.status = :status
+              AND (:q IS NULL OR :q = '' OR lower(b.billNo) LIKE lower(concat('%', :q, '%')))
+            ORDER BY b.createdAt DESC
+            """)
+    List<Bill> findCompletedForExport(
+            @Param("tenantId") UUID tenantId,
+            @Param("status") BillStatus status,
+            @Param("q") String q);
 }

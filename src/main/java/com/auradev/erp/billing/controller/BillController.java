@@ -34,7 +34,22 @@ public class BillController {
         return ResponseEntity.ok(billingService.listCompletedBills(q, pageable));
     }
 
-    @GetMapping("/{id}")
+    @GetMapping("/export/csv")
+    @Operation(summary = "Export bills to CSV", description = "Summary (one row per bill) or detailed (one row per line item)")
+    @PreAuthorize("@authz.can(authentication, 'BILL_VIEW')")
+    public ResponseEntity<byte[]> exportCsv(
+            @RequestParam(required = false) String q,
+            @RequestParam(defaultValue = "summary") String mode) {
+        byte[] csv = billingService.exportCsv(q, mode);
+        String suffix = "detailed".equalsIgnoreCase(mode) ? "line-items" : "summary";
+        return ResponseEntity.ok()
+                .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"bills-" + suffix + ".csv\"")
+                .contentType(org.springframework.http.MediaType.parseMediaType("text/csv"))
+                .body(csv);
+    }
+
+    @GetMapping("/{id:[0-9a-fA-F\\-]{36}}")
     @Operation(summary = "Get bill", description = "Full bill with line items for reprint")
     @PreAuthorize("@authz.can(authentication, 'BILL_VIEW')")
     public ResponseEntity<BillResponse> get(@PathVariable UUID id) {
@@ -62,13 +77,13 @@ public class BillController {
         return ResponseEntity.ok(billingService.listHeldBills());
     }
 
-    @GetMapping("/held/{id}")
+    @GetMapping("/held/{id:[0-9a-fA-F\\-]{36}}")
     @PreAuthorize("@authz.can(authentication, 'BILL_HOLD')")
     public ResponseEntity<BillResponse> getHeld(@PathVariable UUID id) {
         return ResponseEntity.ok(billingService.getHeldBill(id));
     }
 
-    @PostMapping("/held/{id}/complete")
+    @PostMapping("/held/{id:[0-9a-fA-F\\-]{36}}/complete")
     @PreAuthorize("@authz.can(authentication, 'BILL_CREATE')")
     public ResponseEntity<BillResponse> completeHeld(
             @PathVariable UUID id,
@@ -76,7 +91,7 @@ public class BillController {
         return ResponseEntity.ok(billingService.completeHeldBill(id, req));
     }
 
-    @DeleteMapping("/held/{id}")
+    @DeleteMapping("/held/{id:[0-9a-fA-F\\-]{36}}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     @PreAuthorize("@authz.can(authentication, 'BILL_HOLD')")
     public ResponseEntity<Void> discardHeld(@PathVariable UUID id) {
